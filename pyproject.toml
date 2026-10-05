@@ -1,0 +1,57 @@
+[project]
+name = "grid_load_forecasting"
+version = "0.1.0"
+requires-python = ">=3.13.0"
+dependencies = [
+    "boto3>=1.43.108",
+    "polars>=1.44.2",
+    "pyarrow>=25.0.1",
+    "tqdm>=4.70.1",
+]
+
+[project.optional-dependencies]
+cpu = [
+  "torch>=2.9.1",
+]
+cuda = [
+  "torch>=2.9.1",
+]
+rocm = [
+  "torch>=2.9.1",
+  "triton-rocm",
+]
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cuda" },
+    { extra = "rocm" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cuda", extra = "cuda" },
+  { index = "pytorch-rocm", extra = "rocm" },
+]
+triton-rocm= [
+  { index = "pytorch-rocm", extra = "rocm" },
+]
+
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
