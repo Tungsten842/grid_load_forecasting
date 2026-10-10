@@ -16,9 +16,9 @@ def main():
         "aggregated_device_count_active",
         "data_collection_log_timestamp",
     ]
-    df = pl.read_parquet(directory / "*.parquet", columns=columns)
+    lf= pl.scan_parquet(directory / "*.parquet").select(columns)
 
-    df = df.with_columns(
+    lf= lf.with_columns(
         (
             pl.col("total_consumption_active_import")
             / pl.col("aggregated_device_count_active")
@@ -27,18 +27,30 @@ def main():
         .cast(pl.Int64)
         .alias("mean_consumption_per_meter")
     )
-    df = df.drop("total_consumption_active_import")
+    lf = lf.drop("total_consumption_active_import")
 
-    df = df.with_columns(
+    lf = lf.with_columns(
         pl.col("data_collection_log_timestamp").cast(pl.Datetime("ms", "UTC"))
     )
-    df = df.sort(["lv_feeder_unique_id", "data_collection_log_timestamp"])
+    lf = lf.sort(["lv_feeder_unique_id", "data_collection_log_timestamp"])
+
+    df = lf.collect()
 
     print(f"Time series: {df['lv_feeder_unique_id'].n_unique():,}")
 
     # Drop null feeders
     bad_feeders = (
         df.filter(pl.col("mean_consumption_per_meter").is_null())
+        .select("lv_feeder_unique_id")
+        .unique()
+    )
+    df = df.join(bad_feeders, on="lv_feeder_unique_id", how="anti")
+
+    print(f"Dropped time series: {bad_feeders.height}")
+
+    # Drop wrong measurements
+    bad_feeders = (
+        df.filter(pl.col("mean_consumption_per_meter") > 20000)
         .select("lv_feeder_unique_id")
         .unique()
     )
