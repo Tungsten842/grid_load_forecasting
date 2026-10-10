@@ -2,9 +2,10 @@ from pathlib import Path
 
 import joblib
 import lightgbm as lgb
+import mlflow
 import numpy as np
 import polars as pl
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_absolute_error, mean_pinball_loss, mean_squared_error
 
 
 def prepare_features(lf, group_id, ts_name, target_name):
@@ -69,13 +70,30 @@ class MultiQuantileLGBM:
             reference=train_data,
         ).construct()
 
+        base_callbacks = list(kwargs.pop("callbacks", []))
+
         for q in self.quantiles:
-            self.models[q] = lgb.train(
-                {**self.params, "objective": "quantile", "alpha": q},
-                train_set=train_data,
-                valid_sets=[val_data],
-                **kwargs,
-            )
+            with mlflow.start_run(nested=True, run_name=f"quantile_{q}"):
+                current_params = {**self.params, "objective": "quantile", "alpha": q}
+                mlflow.log_params(current_params)
+
+                def mlflow_callback(env):
+                    metrics = {
+                        f"{d}_q{q}-{n}": s for d, n, s, _ in env.evaluation_result_list
+                    }
+                    if metrics:
+                        mlflow.log_metrics(metrics, step=env.iteration)
+
+                model = lgb.train(
+                    current_params,
+                    train_set=train_data,
+                    valid_sets=[val_data],
+                    callbacks=base_callbacks + [mlflow_callback],
+                    **kwargs,
+                )
+                q_str = str(q).replace(".", "_")
+                mlflow.lightgbm.log_model(model, artifact_path=f"model_q{q_str}")
+                self.models[q] = model
         return self
 
     def predict(self, X):
@@ -89,8 +107,10 @@ def main():
     X_val, y_val = prepare_dataset(path / "val.parquet")
     X_test, y_test = prepare_dataset(path / "test.parquet")
 
+    quantiles = (0.1, 0.5, 0.9)
+
     model = MultiQuantileLGBM(
-        quantiles=(0.1, 0.5, 0.9),
+        quantiles=quantiles,
         force_row_wise=True,
         data_sample_strategy="goss",
         n_estimators=15,
@@ -99,20 +119,23 @@ def main():
         n_jobs=-1,
     )
 
-    model.fit(
-        X_train,
-        y_train,
-        eval_X=X_val,
-        eval_y=y_val,
-        callbacks=[lgb.early_stopping(1), lgb.log_evaluation(1)],
-    )
-    preds = model.predict(X_test)
+    with mlflow.start_run():
+        model.fit(
+            X_train,
+            y_train,
+            eval_X=X_val,
+            eval_y=y_val,
+            callbacks=[lgb.early_stopping(1), lgb.log_evaluation(1)],
+        )
+        preds = model.predict(X_test)
 
-    rmse = np.sqrt(mean_squared_error(y_test, preds[:, 1]))
-    mae = mean_absolute_error(y_test, preds[:, 1])
+        pinball_losses = []
+        for i, q in enumerate(quantiles):
+            loss = mean_pinball_loss(y_test, preds[:, i], alpha=q)
+            pinball_losses.append(loss)
+            mlflow.log_metric(f"test_pinball_loss_q{q}", loss)
 
-    print(f"\nReal Test RMSE: {rmse:,.2f}")
-    print(f"Real Test MAE:  {mae:,.2f}")
+        mlflow.log_metric("test_pinball_loss_avg", np.mean(pinball_losses))
 
     joblib.dump(model, "lgb_model.pkl")
 
