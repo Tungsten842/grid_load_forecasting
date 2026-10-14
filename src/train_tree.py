@@ -5,7 +5,7 @@ import lightgbm as lgb
 import mlflow
 import numpy as np
 import polars as pl
-from sklearn.metrics import mean_absolute_error, mean_pinball_loss, mean_squared_error
+from sklearn.metrics import mean_pinball_loss
 
 
 def prepare_features(lf, group_id, ts_name, target_name):
@@ -33,7 +33,14 @@ def prepare_dataset(file, n_series=None, return_unique_id=False):
     target_name = "mean_consumption_per_meter"
     device_count_name = "aggregated_device_count_active"
 
-    raw_columns = [group_id, ts_name, target_name, device_count_name]
+    raw_columns = [
+        group_id,
+        ts_name,
+        target_name,
+        device_count_name,
+        "temperature",
+        "humidity",
+    ]
 
     lf = pl.scan_parquet(file).select(raw_columns)
 
@@ -92,7 +99,9 @@ class MultiQuantileLGBM:
                     **kwargs,
                 )
                 q_str = str(q).replace(".", "_")
-                mlflow.lightgbm.log_model(model, artifact_path=f"model_q{q_str}")
+                mlflow.lightgbm.log_model(model, name=f"model_q{q_str}")
+                ax = lgb.plot_importance(model, importance_type="gain")
+                mlflow.log_figure(ax.figure, "feature_importance.png")
                 self.models[q] = model
         return self
 

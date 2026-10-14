@@ -1,10 +1,86 @@
 import os
+import sqlite3
 from datetime import timedelta
 from pathlib import Path
+
+from scipy.spatial import cKDTree
 
 os.environ["POLARS_UNKNOWN_EXTENSION_TYPE_BEHAVIOR"] = "load_as_storage"
 
 import polars as pl
+
+
+def get_weather(df):
+    folder = Path("original_dataset/meteostat")
+    files = str(folder / "*.parquet")
+    timestamp = "data_collection_log_timestamp"
+
+    # Find stations that have weather data
+    with sqlite3.connect(folder / "stations.db") as conn:
+        stations = pl.read_database(
+            """
+            SELECT id AS station, latitude, longitude
+            FROM stations
+            WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            """,
+            conn,
+        )
+
+    available = pl.scan_parquet(files).select("station").unique().collect()
+
+    stations = available.join(stations, on="station").unique(subset=["station"])
+
+    # Assign the nearest weather station to each location
+    points = df.select("longitude", "latitude").unique().drop_nulls()
+
+    tree = cKDTree(stations.select("longitude", "latitude").to_numpy())
+    _, indices = tree.query(points.to_numpy())
+
+    location_map = points.with_columns(
+        stations["station"].gather(indices).alias("station")
+    )
+
+    result = df.join(
+        location_map,
+        on=["longitude", "latitude"],
+        how="left",
+    )
+
+    # Load weather data for the required stations and dates
+    target_stations = location_map["station"].unique().to_list()
+
+    weather = (
+        pl.scan_parquet(files)
+        .filter(pl.col("station").is_in(target_stations))
+        .select(
+            "station",
+            "time",
+            pl.col("temp").alias("temperature"),
+            pl.col("rhum").alias("humidity"),
+        )
+        .collect()
+    )
+
+    # Convert weather observations to 30-minute intervals
+    weather = (
+        weather.with_columns(pl.col("time").cast(df[timestamp].dtype).alias(timestamp))
+        .drop("time")
+        .sort(["station", timestamp])
+        .upsample(
+            time_column=timestamp,
+            every="30m",
+            group_by="station",
+        )
+        .with_columns(
+            pl.col("temperature").interpolate().over("station"),
+            pl.col("humidity").interpolate().over("station"),
+        )
+    )
+
+    # Attach weather data to the original rows
+    return result.join(weather, on=["station", timestamp]).drop(
+        ["station", "latitude", "longitude"]
+    )
 
 
 def main():
@@ -17,7 +93,7 @@ def main():
         "data_collection_log_timestamp",
         "geometry",
     ]
-    lf = pl.scan_parquet(directory / "*.parquet").select(columns)
+    lf = pl.scan_parquet(directory / "weave" / "*.parquet").select(columns)
 
     lf = lf.with_columns(
         (
@@ -34,6 +110,11 @@ def main():
         pl.col("data_collection_log_timestamp").cast(pl.Datetime("ms", "UTC"))
     )
 
+    lf = lf.with_columns(
+        pl.col("geometry").ext.storage().struct.field("x").alias("longitude"),
+        pl.col("geometry").ext.storage().struct.field("y").alias("latitude"),
+    ).drop("geometry")
+
     df = lf.collect()
 
     print(f"Time series: {df['lv_feeder_unique_id'].n_unique():,}")
@@ -43,7 +124,7 @@ def main():
         df.filter(
             pl.col("mean_consumption_per_meter").is_null()
             | (pl.col("mean_consumption_per_meter") > 20000)
-            | pl.col("geometry").struct.field("x").is_nan()
+            | pl.col("latitude").is_nan()
         )
         .select("lv_feeder_unique_id")
         .unique()
@@ -53,6 +134,10 @@ def main():
     print(f"Dropped time series: {bad_feeders.height}")
 
     df = df.sort(["lv_feeder_unique_id", "data_collection_log_timestamp"])
+
+    df = get_weather(df)
+
+    print(df.columns)
 
     output_dir = Path("dataset")
     output_dir.mkdir(parents=True, exist_ok=True)
