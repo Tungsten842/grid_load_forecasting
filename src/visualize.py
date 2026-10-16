@@ -2,7 +2,6 @@ import warnings
 from pathlib import Path
 
 import joblib
-import numpy as np
 import plotly.graph_objects as go
 import polars as pl
 import streamlit as st
@@ -68,27 +67,6 @@ def build_forecast_plot(y_true, y_preds, quantiles, median_idx, title):
     return fig
 
 
-def forecast(model, X, series_chunks, n_quantiles, median_idx, feature_names):
-    lags = {"lag_30min": 1, "lag_1h": 2, "lag_24h": 48, "lag_7d": 336}
-    lag_indices = {feature_names.index(col): lag for col, lag in lags.items()}
-
-    preds = np.zeros((len(X), n_quantiles))
-    max_steps = max(len(chunk) for chunk in series_chunks)
-
-    for t in range(max_steps):
-        active = [c for c in series_chunks if t < len(c)]
-        curr_idx = [c[t] for c in active]
-
-        for col_idx, lag in lag_indices.items():
-            if t >= lag:
-                lag_idx = [c[t - lag] for c in active]
-                X[curr_idx, col_idx] = preds[lag_idx, median_idx]
-
-        preds[curr_idx] = model.predict(X[curr_idx])
-
-    return preds
-
-
 def main():
     st.title("Test Forecast Evaluation")
 
@@ -112,16 +90,14 @@ def main():
         )["index"]
     ]
 
-    features_df = df.drop("index", "_y", "lv_feeder_unique_id")
-    feature_names = features_df.columns
-    X = features_df.to_numpy()
+    X = df.drop("index", "_y", "lv_feeder_unique_id")
     y = df["_y"].to_numpy()
 
     quantiles = model.quantiles
     n_quantiles = len(quantiles)
     median_idx = quantiles.index(0.5) if 0.5 in quantiles else n_quantiles // 2
 
-    preds = forecast(model, X, series_chunks, n_quantiles, median_idx, feature_names)
+    preds = model.predict(X)
 
     # Plot each time series
     for i, idx in enumerate(series_chunks):

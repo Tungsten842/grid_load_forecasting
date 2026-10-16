@@ -2,6 +2,7 @@ from pathlib import Path
 
 import joblib
 import lightgbm as lgb
+import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
 import polars as pl
@@ -12,18 +13,46 @@ def prepare_features(lf, group_id, ts_name, target_name):
     ts = pl.col(ts_name)
     target = pl.col(target_name)
 
+    temp = pl.col("temperature")
+    hum = pl.col("humidity")
+    weather_features = [
+        (temp - ((100.0 - hum) / 5.0)).alias("dew_point"),
+        (temp - 0.55 * (1.0 - hum / 100.0) * (temp - 14.5)).alias("feels_like_temp"),
+    ]
+
     time_features = [
         (ts.dt.hour() * 2 + ts.dt.minute() // 30).alias("half_hour_period"),
         ts.dt.weekday().alias("day_of_week"),
         ts.dt.month().alias("month"),
     ]
 
-    lags = {"lag_30min": 1, "lag_1h": 2, "lag_24h": 48, "lag_7d": 336}
+    l7 = target.shift(336).over(group_id)
+    l8 = target.shift(384).over(group_id)
+    l14 = target.shift(672).over(group_id)
+
     lag_features = [
-        target.shift(steps).over(group_id).alias(name) for name, steps in lags.items()
+        l7.alias("lag_7d"),
+        l8.alias("lag_8d"),
+        l14.alias("lag_14d"),
     ]
 
-    new_features = time_features + lag_features
+    derived_features = [
+        (l7 - l14).alias("diff_7d_14d"),
+        (l7 - l8).alias("diff_7d_8d"),
+    ]
+
+    rolling_features = [
+        target.shift(336).rolling_mean(336).over(group_id).alias("rolling_mean_7d"),
+        target.shift(336).rolling_std(336).over(group_id).alias("rolling_std_7d"),
+    ]
+
+    new_features = (
+        weather_features
+        + time_features
+        + lag_features
+        + rolling_features
+        + derived_features
+    )
     return lf.with_columns(new_features)
 
 
@@ -31,18 +60,8 @@ def prepare_dataset(file, n_series=None, return_unique_id=False):
     group_id = "lv_feeder_unique_id"
     ts_name = "data_collection_log_timestamp"
     target_name = "mean_consumption_per_meter"
-    device_count_name = "aggregated_device_count_active"
 
-    raw_columns = [
-        group_id,
-        ts_name,
-        target_name,
-        device_count_name,
-        "temperature",
-        "humidity",
-    ]
-
-    lf = pl.scan_parquet(file).select(raw_columns)
+    lf = pl.scan_parquet(file)
 
     if n_series:
         ids = lf.select(group_id).unique().head(n_series)
@@ -50,11 +69,12 @@ def prepare_dataset(file, n_series=None, return_unique_id=False):
 
     lf = prepare_features(lf, group_id, ts_name, target_name)
 
-    drop_cols = [ts_name]
+    drop_cols = [ts_name, "temperature", "humidity", "aggregated_device_count_active"]
     if not return_unique_id:
         drop_cols.append(group_id)
 
     df = lf.drop(drop_cols).drop_nulls().collect()
+    print(df.columns)
 
     X = df.drop(target_name)
     y = df.get_column(target_name)
@@ -101,6 +121,7 @@ class MultiQuantileLGBM:
                 q_str = str(q).replace(".", "_")
                 mlflow.lightgbm.log_model(model, name=f"model_q{q_str}")
                 ax = lgb.plot_importance(model, importance_type="gain")
+                plt.tight_layout()
                 mlflow.log_figure(ax.figure, "feature_importance.png")
                 self.models[q] = model
         return self
@@ -116,13 +137,13 @@ def main():
     X_val, y_val = prepare_dataset(path / "val.parquet")
     X_test, y_test = prepare_dataset(path / "test.parquet")
 
-    quantiles = (0.1, 0.5, 0.9)
+    quantiles = [0.1, 0.5, 0.9]
 
     model = MultiQuantileLGBM(
         quantiles=quantiles,
         force_row_wise=True,
         data_sample_strategy="goss",
-        n_estimators=15,
+        n_estimators=20,
         learning_rate=0.1,
         random_state=42,
         n_jobs=-1,

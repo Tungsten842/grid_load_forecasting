@@ -150,8 +150,8 @@ def main():
         pl.col("data_collection_log_timestamp").quantile(0.90).dt.truncate("1d")
     ).item()
 
-    buffer = timedelta(days=7)
-
+    # Add 2 week buffer to valid and test split
+    buffer = timedelta(days=14)
     train_df = df.filter(pl.col("data_collection_log_timestamp") < t_val)
     valid_df = df.filter(
         (pl.col("data_collection_log_timestamp") >= (t_val - buffer))
