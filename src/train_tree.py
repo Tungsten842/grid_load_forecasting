@@ -42,8 +42,16 @@ def prepare_features(lf, group_id, ts_name, target_name):
     ]
 
     rolling_features = [
-        target.shift(336).rolling_mean(336).over(group_id).alias("rolling_mean_7d"),
-        target.shift(336).rolling_std(336).over(group_id).alias("rolling_std_7d"),
+        target.shift(336)
+        .rolling_mean(336)
+        .over(group_id)
+        .cast(pl.Float32)
+        .alias("rolling_mean_7d"),
+        target.shift(336)
+        .rolling_std(336)
+        .over(group_id)
+        .cast(pl.Float32)
+        .alias("rolling_std_7d"),
     ]
 
     new_features = (
@@ -74,7 +82,7 @@ def prepare_dataset(file, n_series=None, return_unique_id=False):
         drop_cols.append(group_id)
 
     df = lf.drop(drop_cols).drop_nulls().collect()
-    print(df.columns)
+    print(df.schema)
 
     X = df.drop(target_name)
     y = df.get_column(target_name)
@@ -143,7 +151,7 @@ def main():
         quantiles=quantiles,
         force_row_wise=True,
         data_sample_strategy="goss",
-        n_estimators=20,
+        n_estimators=5,
         learning_rate=0.1,
         random_state=42,
         n_jobs=-1,
