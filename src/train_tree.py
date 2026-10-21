@@ -140,6 +140,8 @@ class MultiQuantileLGBM:
 
 
 def main():
+    mlflow.set_experiment("LightGBM")
+
     path = Path("dataset")
     X_train, y_train = prepare_dataset(path / "train.parquet")
     X_val, y_val = prepare_dataset(path / "val.parquet")
