@@ -112,7 +112,7 @@ class MultiQuantileLGBM:
                 current_params = {**self.params, "objective": "quantile", "alpha": q}
                 mlflow.log_params(current_params)
 
-                def mlflow_callback(env):
+                def mlflow_callback(env, q=q):
                     metrics = {
                         f"{d}_q{q}-{n}": s for d, n, s, _ in env.evaluation_result_list
                     }
@@ -153,7 +153,7 @@ def main():
         quantiles=quantiles,
         force_row_wise=True,
         data_sample_strategy="goss",
-        n_estimators=5,
+        n_estimators=20,
         learning_rate=0.1,
         random_state=42,
         n_jobs=-1,
