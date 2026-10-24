@@ -4,7 +4,6 @@ import mlflow
 import numpy as np
 import polars as pl
 import torch
-from line_profiler import profile
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader, IterableDataset
@@ -40,7 +39,6 @@ class RandomWindowDataset(IterableDataset):
         self.lf = pl.scan_parquet(str(path)).select([self.FEEDER_COL, self.SERIES_COL])
         self.total_rows = self.lf.select(pl.len()).collect().item()
 
-    @profile
     def __iter__(self):
         w_idx = torch.arange(self.WINDOW_SIZE)
         for offset in range(0, self.total_rows, self.CHUNK_ROWS):
@@ -123,10 +121,11 @@ class Trainer:
         self.optimizer = Adam(self.model.parameters(), 0.00002)
         self.loss_fn = PinballLoss().to(self.device)
 
+        self.dataloaders = {}
+
         train_dataset = RandomWindowDataset("dataset/train.parquet", 128)
         train_dataset = LimitedIterableDataset(train_dataset, 32768)
-
-        self.train_dataloader = DataLoader(
+        self.dataloaders["train"] = DataLoader(
             train_dataset,
             batch_size=None,
             num_workers=0,
@@ -135,8 +134,7 @@ class Trainer:
         )
 
         val_dataset = RandomWindowDataset("dataset/val.parquet", 128, stride=48)
-
-        self.val_dataloader = DataLoader(
+        self.dataloaders["val"] = DataLoader(
             val_dataset,
             batch_size=None,
             num_workers=1,
@@ -144,7 +142,24 @@ class Trainer:
             pin_memory=True,
         )
 
-    @profile
+        test_dataset = RandomWindowDataset("dataset/test.parquet", 128, stride=48)
+        self.dataloaders["test"] = DataLoader(
+            test_dataset,
+            batch_size=None,
+            num_workers=1,
+            pin_memory=True,
+        )
+
+        test_unseen_dataset = RandomWindowDataset(
+            "dataset/test_unseen.parquet", 128, stride=48
+        )
+        self.dataloaders["test_unseen"] = DataLoader(
+            test_unseen_dataset,
+            batch_size=None,
+            num_workers=1,
+            pin_memory=True,
+        )
+
     def fit(self):
         pbar = tqdm(desc="train", unit="sample", unit_scale=True)
 
@@ -152,7 +167,7 @@ class Trainer:
             running_train_loss = 0.0
             running_samples = 0
             total_samples = 0
-            for batch in self.train_dataloader:
+            for batch in self.dataloaders["train"]:
                 inputs, targets = batch
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
@@ -178,18 +193,22 @@ class Trainer:
                     running_train_loss = 0.0
                     running_samples = 0
                 if total_samples % 524288 * 2 == 0 and total_samples > 0:
-                    val_loss = self.evaluate()
+                    val_loss = self.evaluate("val")
                     mlflow.log_metric("val_loss", val_loss, step=total_samples)
             pbar.close()
+            test_loss = self.evaluate("test")
+            mlflow.log_metric("test_loss", test_loss)
 
-    @profile
-    def evaluate(self):
+            test_unseen_loss = self.evaluate("test_unseen")
+            mlflow.log_metric("test_unseen_loss", test_unseen_loss)
+
+    def evaluate(self, split):
         with torch.inference_mode():
             self.model.eval()
             total_val_loss = 0.0
             val_pbar = tqdm(desc="val", unit="sample", unit_scale=True, leave=False)
             total_samples = 0
-            for batch in self.val_dataloader:
+            for batch in self.dataloaders[split]:
                 inputs, targets = batch
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
