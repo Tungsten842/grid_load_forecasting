@@ -2,10 +2,12 @@ import warnings
 from pathlib import Path
 
 import joblib
+import numpy as np
 import plotly.graph_objects as go
 import polars as pl
 import streamlit as st
 import torch
+from sklearn.metrics import mean_pinball_loss
 
 from train_nn import LoadForecaster
 from train_tree import MultiQuantileLGBM, prepare_dataset  # noqa
@@ -167,17 +169,27 @@ def main():
     n_quantiles = len(quantiles)
     median_idx = quantiles.index(0.5) if 0.5 in quantiles else n_quantiles // 2
 
-    preds = lgb_model.predict(X)
+    lgb_preds = lgb_model.predict(X)
 
     with torch.inference_mode():
         nn_preds = nn_model(nn_inputs.to(device)).cpu().numpy()
 
     # Plot each time series
     for i, idx in enumerate(series_chunks):
+        col1, col2 = st.columns(2)
+        col1.metric(
+            "LGBM Pinball Loss",
+            f"{np.mean([mean_pinball_loss(y[idx], c, alpha=q) for c, q in zip(lgb_preds[idx].T, quantiles)]):.2f}",
+        )
+        col2.metric(
+            "NN Pinball Loss",
+            f"{np.mean([mean_pinball_loss(y[idx], c, alpha=q) for c, q in zip(nn_preds[i].T, quantiles)]):.2f}",
+        )
+
         fig = build_forecast_plot(
             y_true=y[idx],
             history=nn_inputs[i],
-            lgb_pred=preds[idx],
+            lgb_pred=lgb_preds[idx],
             nn_pred=nn_preds[i],
             quantiles=quantiles,
             median_idx=median_idx,
