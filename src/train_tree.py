@@ -41,6 +41,15 @@ def prepare_features(lf, group_id, ts_name, target_name):
         (l7 - l8).alias("diff_7d_8d"),
     ]
 
+    period_day = ts.dt.hour() * 2 + ts.dt.minute() // 30
+    day_of_year = ts.dt.ordinal_day()
+    cyclic_features = [
+        (period_day * (2 * np.pi / 48)).sin().alias("sin_daily"),
+        (period_day * (2 * np.pi / 48)).cos().alias("cos_daily"),
+        (day_of_year * (2 * np.pi / 365.25)).sin().alias("sin_annual"),
+        (day_of_year * (2 * np.pi / 365.25)).cos().alias("cos_annual"),
+    ]
+
     rolling_features = [
         target.shift(336)
         .rolling_mean(336)
@@ -60,6 +69,7 @@ def prepare_features(lf, group_id, ts_name, target_name):
         + lag_features
         + rolling_features
         + derived_features
+        + cyclic_features
     )
     return lf.with_columns(new_features)
 
@@ -165,7 +175,7 @@ def main():
             y_train,
             eval_X=X_val,
             eval_y=y_val,
-            callbacks=[lgb.early_stopping(1), lgb.log_evaluation(1)],
+            callbacks=[lgb.early_stopping(5), lgb.log_evaluation(1)],
         )
         preds = model.predict(X_test)
 
