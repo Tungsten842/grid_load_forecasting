@@ -131,7 +131,8 @@ def main():
 
     lgb_model = joblib.load("lgb_model.pkl")
 
-    nn_model = LoadForecaster()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    nn_model = LoadForecaster().to(device)
     nn_model.load_state_dict(torch.load("model.pt"))
     nn_model.eval()
 
@@ -169,7 +170,7 @@ def main():
     preds = lgb_model.predict(X)
 
     with torch.inference_mode():
-        nn_preds = nn_model(nn_inputs).numpy()
+        nn_preds = nn_model(nn_inputs.to(device)).cpu().numpy()
 
     # Plot each time series
     for i, idx in enumerate(series_chunks):

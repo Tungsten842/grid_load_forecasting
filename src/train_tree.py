@@ -72,8 +72,8 @@ def prepare_dataset(file, n_series=None, return_unique_id=False):
     lf = pl.scan_parquet(file)
 
     if n_series:
-        ids = lf.select(group_id).unique().head(n_series)
-        lf = lf.join(ids, on=group_id)
+        ids = lf.select(group_id).unique().sort(group_id).head(n_series)
+        lf = lf.join(ids, on=group_id, maintain_order="left")
 
     lf = prepare_features(lf, group_id, ts_name, target_name)
 
