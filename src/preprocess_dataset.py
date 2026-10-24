@@ -159,21 +159,23 @@ def main():
         pl.col("data_collection_log_timestamp").quantile(0.90).dt.truncate("1d")
     ).item()
 
-    # Add 2 week buffer to valid and test split
+    # 2 weeks buffer
     buffer = timedelta(days=14)
 
-    lf.filter(pl.col("data_collection_log_timestamp") < t_val).sink_parquet(
-        output_dir / "train.parquet"
+    ts = pl.col("data_collection_log_timestamp")
+    is_zero_shot = pl.col("lv_feeder_unique_id").is_not_null() & (
+        (pl.col("lv_feeder_unique_id").hash(seed=42) % 100) < 5
     )
 
-    lf.filter(
-        (pl.col("data_collection_log_timestamp") >= (t_val - buffer))
-        & (pl.col("data_collection_log_timestamp") < t_test)
-    ).sink_parquet(output_dir / "val.parquet")
+    splits = {
+        "train.parquet": ~is_zero_shot & (ts < t_val),
+        "val.parquet": ~is_zero_shot & (ts >= (t_val - buffer)) & (ts < t_test),
+        "test.parquet": ~is_zero_shot & (ts >= (t_test - buffer)),
+        "test_unseen.parquet": is_zero_shot & (ts >= (t_test - buffer)),
+    }
 
-    lf.filter(
-        pl.col("data_collection_log_timestamp") >= (t_test - buffer)
-    ).sink_parquet(output_dir / "test.parquet")
+    for filename, predicate in splits.items():
+        lf.filter(predicate).sink_parquet(output_dir / filename)
 
 
 if __name__ == "__main__":
