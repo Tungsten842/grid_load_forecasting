@@ -152,7 +152,7 @@ def main():
     )
 
     df = full_df.filter(
-        pl.int_range(pl.len()).over("lv_feeder_unique_id").is_between(672, 1007)
+        pl.int_range(pl.len()).over("lv_feeder_unique_id") >= 672
     ).with_row_index()
 
     series_chunks = [

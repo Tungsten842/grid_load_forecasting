@@ -149,6 +149,22 @@ class MultiQuantileLGBM:
         return preds
 
 
+def evaluate_model(model, X_test, y_test, quantiles, dataset_name):
+    preds = model.predict(X_test)
+    pinball_losses = []
+
+    for i, q in enumerate(quantiles):
+        loss = mean_pinball_loss(y_test, preds[:, i], alpha=q)
+        pinball_losses.append(loss)
+
+        mlflow.log_metric(f"{dataset_name}_pinball_loss_q{q}", loss)
+
+    avg_loss = float(np.mean(pinball_losses))
+    mlflow.log_metric(f"{dataset_name}_pinball_loss_avg", avg_loss)
+
+    return preds, pinball_losses
+
+
 def main():
     mlflow.set_experiment("LightGBM")
 
@@ -156,6 +172,7 @@ def main():
     X_train, y_train = prepare_dataset(path / "train.parquet")
     X_val, y_val = prepare_dataset(path / "val.parquet")
     X_test, y_test = prepare_dataset(path / "test.parquet")
+    X_test_unseen, y_test_unseen = prepare_dataset(path / "test_unseen.parquet")
 
     quantiles = [0.1, 0.5, 0.9]
 
@@ -177,15 +194,8 @@ def main():
             eval_y=y_val,
             callbacks=[lgb.early_stopping(5), lgb.log_evaluation(1)],
         )
-        preds = model.predict(X_test)
-
-        pinball_losses = []
-        for i, q in enumerate(quantiles):
-            loss = mean_pinball_loss(y_test, preds[:, i], alpha=q)
-            pinball_losses.append(loss)
-            mlflow.log_metric(f"test_pinball_loss_q{q}", loss)
-
-        mlflow.log_metric("test_pinball_loss_avg", np.mean(pinball_losses))
+        evaluate_model(model, X_test, y_test, quantiles, "test")
+        evaluate_model(model, X_test_unseen, y_test_unseen, quantiles, "test_unseen")
 
     joblib.dump(model, "lgb_model.pkl")
 
