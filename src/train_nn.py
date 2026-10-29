@@ -31,12 +31,22 @@ class RandomWindowDataset(IterableDataset):
     SERIES_COL = "mean_consumption_per_meter"
     FEEDER_COL = "lv_feeder_unique_id"
 
-    def __init__(self, path, batch_size, stride=48):
+    def __init__(self, path, batch_size, stride=48, n_meters=None):
         super().__init__()
         self.stride = stride
         self.batch_size = batch_size
 
         self.lf = pl.scan_parquet(str(path)).select([self.FEEDER_COL, self.SERIES_COL])
+
+        if n_meters:
+            ids = (
+                self.lf.select(self.FEEDER_COL)
+                .unique()
+                .sort(self.FEEDER_COL)
+                .head(n_meters)
+            )
+            self.lf = self.lf.join(ids, on=self.FEEDER_COL, maintain_order="left")
+
         self.total_rows = self.lf.select(pl.len()).collect().item()
 
     def __iter__(self):
