@@ -26,11 +26,15 @@ def prepare_features(lf, group_id, ts_name, target_name):
         ts.dt.month().alias("month"),
     ]
 
+    l2 = target.shift(96).over(group_id)
+    l3 = target.shift(144).over(group_id)
     l7 = target.shift(336).over(group_id)
     l8 = target.shift(384).over(group_id)
     l14 = target.shift(672).over(group_id)
 
     lag_features = [
+        l2.alias("lag_2d"),
+        l3.alias("lag_3d"),
         l7.alias("lag_7d"),
         l8.alias("lag_8d"),
         l14.alias("lag_14d"),
@@ -101,9 +105,10 @@ def prepare_dataset(file, n_series=None, return_unique_id=False):
 
 
 class MultiQuantileLGBM:
-    def __init__(self, quantiles, **params):
+    def __init__(self, quantiles, ignore_features=None, **params):
         self.quantiles = quantiles
         self.params = params
+        self.ignore_features = ignore_features or {}
         self.models = {}
 
     def fit(self, *args, **kwargs):
@@ -114,12 +119,20 @@ class MultiQuantileLGBM:
             label=kwargs.pop("eval_y"),
             reference=train_data,
         ).construct()
+        feature_names = args[0].columns
 
         base_callbacks = list(kwargs.pop("callbacks", []))
 
         for q in self.quantiles:
             with mlflow.start_run(nested=True, run_name=f"quantile_{q}"):
                 current_params = {**self.params, "objective": "quantile", "alpha": q}
+
+                ignored = self.ignore_features.get(q, [])
+                if ignored:
+                    current_params["feature_contri"] = [
+                        0.0 if col in ignored else 1.0 for col in feature_names
+                    ]
+
                 mlflow.log_params(current_params)
 
                 def mlflow_callback(env, q=q):
@@ -178,6 +191,14 @@ def main():
 
     model = MultiQuantileLGBM(
         quantiles=quantiles,
+        ignore_features={
+            0.1: [
+                "lag_2d",
+                "lag_3d",
+                "sin_daily",
+                "cos_daily",
+            ]
+        },
         force_row_wise=True,
         data_sample_strategy="goss",
         n_estimators=20,

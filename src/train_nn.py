@@ -23,17 +23,19 @@ class PinballLoss(nn.Module):
         ).mean()
 
 
+INPUT_WINDOW = 672
+GAP_WINDOW = 48
+OUTPUT_WINDOW = 48
+TOTAL_WINDOW = INPUT_WINDOW + GAP_WINDOW + OUTPUT_WINDOW
+
+
 class RandomWindowDataset(IterableDataset):
-    INPUT_WINDOW = 672
-    OUTPUT_WINDOW = 336
-    WINDOW_SIZE = INPUT_WINDOW + OUTPUT_WINDOW
     CHUNK_ROWS = 4194304
     SERIES_COL = "mean_consumption_per_meter"
     FEEDER_COL = "lv_feeder_unique_id"
 
-    def __init__(self, path, batch_size, stride=48, n_meters=None):
+    def __init__(self, path, batch_size, n_meters=None):
         super().__init__()
-        self.stride = stride
         self.batch_size = batch_size
 
         self.lf = pl.scan_parquet(str(path)).select([self.FEEDER_COL, self.SERIES_COL])
@@ -50,7 +52,7 @@ class RandomWindowDataset(IterableDataset):
         self.total_rows = self.lf.select(pl.len()).collect().item()
 
     def __iter__(self):
-        w_idx = torch.arange(self.WINDOW_SIZE)
+        w_idx = torch.arange(TOTAL_WINDOW)
         for offset in range(0, self.total_rows, self.CHUNK_ROWS):
             df = self.lf.slice(offset, self.CHUNK_ROWS).collect()
 
@@ -68,9 +70,9 @@ class RandomWindowDataset(IterableDataset):
             ]
 
             valid_starts = [
-                np.arange(start, stop - self.WINDOW_SIZE + 1, self.stride)
+                np.arange(start, stop - TOTAL_WINDOW + 1, OUTPUT_WINDOW)
                 for start, stop in pairwise(boundaries)
-                if stop - start >= self.WINDOW_SIZE
+                if stop - start >= TOTAL_WINDOW
             ]
 
             if not valid_starts:
@@ -86,16 +88,16 @@ class RandomWindowDataset(IterableDataset):
                 if len(b) < self.batch_size:
                     continue
                 w = vals[b + w_idx]
-                yield w[:, : self.INPUT_WINDOW], w[:, self.INPUT_WINDOW :]
+                yield w[:, :INPUT_WINDOW], w[:, -OUTPUT_WINDOW:]
 
 
 class LoadForecaster(nn.Module):
     def __init__(self):
         super().__init__()
-        self.l1 = nn.Linear(48 * 7 * 2, 336 * 3)
+        self.l1 = nn.Linear(INPUT_WINDOW, 336 * 3)
         self.l2 = nn.Linear(336 * 3, 336 * 3)
         self.l3 = nn.Linear(336 * 3, 336 * 3)
-        self.l4 = nn.Linear(336 * 3, 336 * 3)
+        self.l4 = nn.Linear(336 * 3, OUTPUT_WINDOW * 3)
         self.act = nn.SiLU()
 
     def forward(self, x):
@@ -111,7 +113,7 @@ class LoadForecaster(nn.Module):
         y = self.act(y)
         y = self.l4(y)
 
-        y = y.reshape(-1, 336, 3)
+        y = y.reshape(-1, OUTPUT_WINDOW, 3)
         return y * std.unsqueeze(-1) + mean.unsqueeze(-1)
 
 
@@ -143,7 +145,7 @@ class Trainer:
             pin_memory=True,
         )
 
-        val_dataset = RandomWindowDataset("dataset/val.parquet", 128, stride=48)
+        val_dataset = RandomWindowDataset("dataset/val.parquet", 128)
         self.dataloaders["val"] = DataLoader(
             val_dataset,
             batch_size=None,
@@ -152,7 +154,7 @@ class Trainer:
             pin_memory=True,
         )
 
-        test_dataset = RandomWindowDataset("dataset/test.parquet", 128, stride=48)
+        test_dataset = RandomWindowDataset("dataset/test.parquet", 128)
         self.dataloaders["test"] = DataLoader(
             test_dataset,
             batch_size=None,
@@ -160,9 +162,7 @@ class Trainer:
             pin_memory=True,
         )
 
-        test_unseen_dataset = RandomWindowDataset(
-            "dataset/test_unseen.parquet", 128, stride=48
-        )
+        test_unseen_dataset = RandomWindowDataset("dataset/test_unseen.parquet", 128)
         self.dataloaders["test_unseen"] = DataLoader(
             test_unseen_dataset,
             batch_size=None,

@@ -9,23 +9,26 @@ import streamlit as st
 import torch
 from sklearn.metrics import mean_pinball_loss
 
-from train_nn import LoadForecaster
+from train_nn import (
+    GAP_WINDOW,
+    INPUT_WINDOW,
+    OUTPUT_WINDOW,
+    TOTAL_WINDOW,
+    LoadForecaster,
+)
 from train_tree import MultiQuantileLGBM, prepare_dataset  # noqa
 
 warnings.filterwarnings("ignore")
 
 
-def build_forecast_plot(
-    y_true, history, lgb_pred, nn_pred, quantiles, median_idx, title
-):
+def build_forecast_plot(y_true, lgb_pred, nn_pred, quantiles, median_idx, title):
     fig = go.Figure()
     n_quantiles = len(quantiles)
 
     fig.add_trace(
         go.Scatter(
-            x=list(range(-len(history), 0)),
-            y=history,
-            name="History (Past Week)",
+            y=y_true,
+            name="Actual",
             line={"color": "black", "width": 1.5},
         )
     )
@@ -101,18 +104,14 @@ def build_forecast_plot(
     fig.add_trace(
         go.Scatter(
             y=lgb_pred[:, median_idx],
-            name=f"Pred (q={quantiles[median_idx]})",
+            name=f"LGB Pred (q={quantiles[median_idx]})",
             line={"color": "blue", "width": 2},
         )
     )
 
-    fig.add_trace(
-        go.Scatter(
-            y=y_true,
-            name="Actual",
-            line={"color": "black", "width": 1.5},
-        )
-    )
+    # Shift all prediction traces to tomorrow's indices
+    for trace in fig.data[1:]:
+        trace.x = list(range(len(y_true) - OUTPUT_WINDOW, len(y_true)))
 
     fig.update_layout(
         title=title,
@@ -121,7 +120,7 @@ def build_forecast_plot(
     )
 
     fig.update_xaxes(
-        range=[-96, len(y_true)],
+        range=[len(y_true) - 192, len(y_true)],
         rangeslider={"visible": True},
     )
     return fig
@@ -141,18 +140,23 @@ def main():
     n_series = 40
     X, y = prepare_dataset(Path("dataset/test.parquet"), n_series, True)
 
-    full_df = X.with_columns(_y=y).filter(pl.len().over("lv_feeder_unique_id") >= 1008)
+    full_df = X.with_columns(_y=y).filter(
+        pl.len().over("lv_feeder_unique_id") >= TOTAL_WINDOW
+    )
 
-    nn_inputs = (
+    full_series = (
         full_df.group_by("lv_feeder_unique_id", maintain_order=True)
-        .agg(pl.col("_y").cast(pl.Float32).head(672))
-        .select(pl.col("_y").list.to_array(672))
+        .agg(pl.col("_y").cast(pl.Float32).head(TOTAL_WINDOW))
+        .select(pl.col("_y").list.to_array(TOTAL_WINDOW))
         .to_series()
         .to_torch()
     )
+    nn_inputs = full_series[:, :INPUT_WINDOW]
 
     df = full_df.filter(
-        pl.int_range(pl.len()).over("lv_feeder_unique_id") >= 672
+        pl.int_range(pl.len())
+        .over("lv_feeder_unique_id")
+        .is_between(INPUT_WINDOW + GAP_WINDOW, TOTAL_WINDOW - 1)
     ).with_row_index()
 
     series_chunks = [
@@ -187,8 +191,7 @@ def main():
         )
 
         fig = build_forecast_plot(
-            y_true=y[idx],
-            history=nn_inputs[i],
+            y_true=full_series[i],
             lgb_pred=lgb_preds[idx],
             nn_pred=nn_preds[i],
             quantiles=quantiles,
