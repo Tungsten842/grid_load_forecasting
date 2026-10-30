@@ -14,16 +14,17 @@ class PinballLoss(nn.Module):
     def __init__(self, quantiles=(0.1, 0.5, 0.9)):
         super().__init__()
         self.quantiles_list = quantiles
-        self.register_buffer("quantiles", torch.tensor(quantiles).view(1, 1, -1))
+        self.register_buffer("quantiles", torch.tensor(quantiles))
 
     def forward(self, y_pred, y_true):
         error = y_true.unsqueeze(-1) - y_pred
-        loss = torch.maximum(
+        q_loss = torch.maximum(
             self.quantiles * error,
             (self.quantiles - 1) * error,
         )
-        q_loss = loss.mean(dim=(0, 1))
-        return q_loss.mean(), q_loss
+        loss = q_loss.mean(dim=(0, 2))
+        q_loss = q_loss.mean(dim=(0, 1))
+        return loss, q_loss
 
 
 INPUT_WINDOW = 672
@@ -190,7 +191,8 @@ class Trainer:
                 batch_size = inputs.size(0)
                 pbar.update(batch_size)
                 targets_pred = self.model(inputs)
-                train_loss, q_loss = self.loss_fn(targets_pred, targets)
+                train_loss_raw, q_loss = self.loss_fn(targets_pred, targets)
+                train_loss = train_loss_raw.mean()
                 train_loss.backward()
                 self.optimizer.step()
 
@@ -213,7 +215,7 @@ class Trainer:
                     running_train_loss = 0.0
                     running_q_loss = 0.0
                     running_samples = 0
-                if total_samples % 524288 * 2 == 0 and total_samples > 0:
+                if total_samples % 2097152 == 0 and total_samples > 0:
                     self.evaluate("val", total_samples)
             pbar.close()
 
@@ -225,6 +227,7 @@ class Trainer:
         with torch.inference_mode():
             self.model.eval()
             total_val_loss = 0.0
+            running_raw_loss = 0.0
             running_q_loss = 0.0
             val_pbar = tqdm(desc="val", unit="sample", unit_scale=True, leave=False)
             total_samples = 0
@@ -236,9 +239,13 @@ class Trainer:
                 batch_size = inputs.size(0)
                 val_pbar.update(batch_size)
                 targets_pred = self.model(inputs)
-                test_loss, q_loss = self.loss_fn(targets_pred, targets)
+                raw_loss, q_loss = self.loss_fn(targets_pred, targets)
+                test_loss = raw_loss.mean()
+
                 total_val_loss += test_loss.item() * batch_size
                 running_q_loss += q_loss * batch_size
+                if split == "test":
+                    running_raw_loss += raw_loss * batch_size
                 total_samples += batch_size
 
             val_pbar.close()
@@ -253,6 +260,11 @@ class Trainer:
             else:
                 mlflow.log_metrics(metrics)
 
+            if split == "test":
+                average_raw_loss = running_raw_loss / total_samples
+                for i, loss in enumerate(average_raw_loss.tolist()):
+                    mlflow.log_metric("time_loss", loss, i)
+
             self.model.train()
             return val_loss
 
@@ -261,6 +273,7 @@ class Trainer:
 
 
 def main():
+    mlflow.set_experiment("NN")
     trainer = Trainer()
     trainer.fit()
     trainer.save()
