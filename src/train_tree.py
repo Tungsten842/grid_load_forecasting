@@ -162,7 +162,7 @@ class MultiQuantileLGBM:
         return preds
 
 
-def evaluate_model(model, X_test, y_test, quantiles, dataset_name):
+def evaluate_model(model, X_test, y_test, quantiles, split):
     preds = model.predict(X_test)
     pinball_losses = []
 
@@ -170,10 +170,10 @@ def evaluate_model(model, X_test, y_test, quantiles, dataset_name):
         loss = mean_pinball_loss(y_test, preds[:, i], alpha=q)
         pinball_losses.append(loss)
 
-        mlflow.log_metric(f"{dataset_name}_pinball_loss_q{q}", loss)
+        mlflow.log_metric(f"{split}_pinball_loss_q{q}", loss)
 
     avg_loss = float(np.mean(pinball_losses))
-    mlflow.log_metric(f"{dataset_name}_pinball_loss_avg", avg_loss)
+    mlflow.log_metric(f"{split}_pinball_loss_mean", avg_loss)
 
     return preds, pinball_losses
 

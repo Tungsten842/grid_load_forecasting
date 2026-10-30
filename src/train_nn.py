@@ -204,12 +204,12 @@ class Trainer:
                 if total_samples % 32768 == 0 and total_samples > 0:
                     running_train_loss /= running_samples
                     pbar.set_postfix(loss=f"{running_train_loss:.1f}", refresh=False)
-                    metrics = {"train_loss": running_train_loss}
+                    metrics = {"train_pinball_loss_mean": running_train_loss}
                     for q, l in zip(
                         self.loss_fn.quantiles_list,
                         (running_q_loss / running_samples).tolist(),
                     ):
-                        metrics[f"train_loss_q{q}"] = l
+                        metrics[f"train_pinball_loss_q{q}"] = l
                     mlflow.log_metrics(metrics, step=total_samples)
 
                     running_train_loss = 0.0
@@ -251,10 +251,10 @@ class Trainer:
             val_pbar.close()
             val_loss = total_val_loss / total_samples
 
-            metrics = {f"{split}_loss": val_loss}
+            metrics = {f"{split}_pinball_loss_mean": val_loss}
             average_q_loss = running_q_loss / total_samples
             for q, l in zip(self.loss_fn.quantiles_list, average_q_loss):
-                metrics[f"{split}_loss_q{q}"] = l.item()
+                metrics[f"{split}_pinball_loss_q{q}"] = l.item()
             if split == "train" or split == "val":
                 mlflow.log_metrics(metrics, step)
             else:
@@ -263,7 +263,7 @@ class Trainer:
             if split == "test":
                 average_raw_loss = running_raw_loss / total_samples
                 for i, loss in enumerate(average_raw_loss.tolist()):
-                    mlflow.log_metric("time_loss", loss, i)
+                    mlflow.log_metric("horizon_test_pinball_loss_mean", loss, i)
 
             self.model.train()
             return val_loss
