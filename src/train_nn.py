@@ -13,14 +13,17 @@ from tqdm import tqdm
 class PinballLoss(nn.Module):
     def __init__(self, quantiles=(0.1, 0.5, 0.9)):
         super().__init__()
+        self.quantiles_list = quantiles
         self.register_buffer("quantiles", torch.tensor(quantiles).view(1, 1, -1))
 
     def forward(self, y_pred, y_true):
         error = y_true.unsqueeze(-1) - y_pred
-        return torch.maximum(
+        loss = torch.maximum(
             self.quantiles * error,
             (self.quantiles - 1) * error,
-        ).mean()
+        )
+        q_loss = loss.mean(dim=(0, 1))
+        return q_loss.mean(), q_loss
 
 
 INPUT_WINDOW = 672
@@ -175,6 +178,7 @@ class Trainer:
 
         with mlflow.start_run():
             running_train_loss = 0.0
+            running_q_loss = 0.0
             running_samples = 0
             total_samples = 0
             for batch in self.dataloaders["train"]:
@@ -186,36 +190,42 @@ class Trainer:
                 batch_size = inputs.size(0)
                 pbar.update(batch_size)
                 targets_pred = self.model(inputs)
-                train_loss = self.loss_fn(targets_pred, targets)
+                train_loss, q_loss = self.loss_fn(targets_pred, targets)
                 train_loss.backward()
                 self.optimizer.step()
 
                 running_train_loss += train_loss.item() * batch_size
+                running_q_loss += q_loss.detach() * batch_size
                 running_samples += batch_size
                 total_samples += batch_size
 
                 if total_samples % 32768 == 0 and total_samples > 0:
                     running_train_loss /= running_samples
-                    mlflow.log_metric(
-                        "train_loss", running_train_loss, step=total_samples
-                    )
                     pbar.set_postfix(loss=f"{running_train_loss:.1f}", refresh=False)
+                    metrics = {"train_loss": running_train_loss}
+                    for q, l in zip(
+                        self.loss_fn.quantiles_list,
+                        (running_q_loss / running_samples).tolist(),
+                    ):
+                        metrics[f"train_loss_q{q}"] = l
+                    mlflow.log_metrics(metrics, step=total_samples)
+
                     running_train_loss = 0.0
+                    running_q_loss = 0.0
                     running_samples = 0
                 if total_samples % 524288 * 2 == 0 and total_samples > 0:
-                    val_loss = self.evaluate("val")
-                    mlflow.log_metric("val_loss", val_loss, step=total_samples)
+                    self.evaluate("val", total_samples)
             pbar.close()
-            test_loss = self.evaluate("test")
-            mlflow.log_metric("test_loss", test_loss)
 
-            test_unseen_loss = self.evaluate("test_unseen")
-            mlflow.log_metric("test_unseen_loss", test_unseen_loss)
+            self.evaluate("test", total_samples)
 
-    def evaluate(self, split):
+            self.evaluate("test_unseen", total_samples)
+
+    def evaluate(self, split, step):
         with torch.inference_mode():
             self.model.eval()
             total_val_loss = 0.0
+            running_q_loss = 0.0
             val_pbar = tqdm(desc="val", unit="sample", unit_scale=True, leave=False)
             total_samples = 0
             for batch in self.dataloaders[split]:
@@ -226,12 +236,23 @@ class Trainer:
                 batch_size = inputs.size(0)
                 val_pbar.update(batch_size)
                 targets_pred = self.model(inputs)
-                test_loss = self.loss_fn(targets_pred, targets)
+                test_loss, q_loss = self.loss_fn(targets_pred, targets)
                 total_val_loss += test_loss.item() * batch_size
+                running_q_loss += q_loss * batch_size
                 total_samples += batch_size
 
             val_pbar.close()
             val_loss = total_val_loss / total_samples
+
+            metrics = {f"{split}_loss": val_loss}
+            average_q_loss = running_q_loss / total_samples
+            for q, l in zip(self.loss_fn.quantiles_list, average_q_loss):
+                metrics[f"{split}_loss_q{q}"] = l.item()
+            if split == "train" or split == "val":
+                mlflow.log_metrics(metrics, step)
+            else:
+                mlflow.log_metrics(metrics)
+
             self.model.train()
             return val_loss
 
