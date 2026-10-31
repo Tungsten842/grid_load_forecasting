@@ -195,9 +195,6 @@ def main():
     path = Path("dataset")
     X_train, y_train = prepare_dataset(path / "train.parquet")
     X_val, y_val = prepare_dataset(path / "val.parquet")
-    X_test, y_test = prepare_dataset(path / "test.parquet")
-    X_test_unseen, y_test_unseen = prepare_dataset(path / "test_unseen.parquet")
-
     quantiles = [0.1, 0.5, 0.9]
 
     model = MultiQuantileLGBM(
@@ -226,6 +223,12 @@ def main():
             eval_y=y_val,
             callbacks=[lgb.early_stopping(5), lgb.log_evaluation(1)],
         )
+
+        del X_train, y_train, X_val, y_val
+
+        X_test, y_test = prepare_dataset(path / "test.parquet")
+        X_test_unseen, y_test_unseen = prepare_dataset(path / "test_unseen.parquet")
+
         evaluate_model(model, X_test, y_test, quantiles, "test")
         evaluate_model(model, X_test_unseen, y_test_unseen, quantiles, "test_unseen")
 
