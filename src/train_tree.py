@@ -48,10 +48,10 @@ def prepare_features(lf, group_id, ts_name, target_name):
     period_day = ts.dt.hour() * 2 + ts.dt.minute() // 30
     day_of_year = ts.dt.ordinal_day()
     cyclic_features = [
-        (period_day * (2 * np.pi / 48)).sin().alias("sin_daily"),
-        (period_day * (2 * np.pi / 48)).cos().alias("cos_daily"),
-        (day_of_year * (2 * np.pi / 365.25)).sin().alias("sin_annual"),
-        (day_of_year * (2 * np.pi / 365.25)).cos().alias("cos_annual"),
+        (period_day * (2 * np.pi / 48)).sin().cast(pl.Float32).alias("sin_daily"),
+        (period_day * (2 * np.pi / 48)).cos().cast(pl.Float32).alias("cos_daily"),
+        (day_of_year * (2 * np.pi / 365.25)).sin().cast(pl.Float32).alias("sin_annual"),
+        (day_of_year * (2 * np.pi / 365.25)).cos().cast(pl.Float32).alias("cos_annual"),
     ]
 
     rolling_features = [
@@ -174,6 +174,17 @@ def evaluate_model(model, X_test, y_test, quantiles, split):
 
     avg_loss = float(np.mean(pinball_losses))
     mlflow.log_metric(f"{split}_pinball_loss_mean", avg_loss)
+
+    if split == "test":
+        diff = y_test.to_numpy()[:, None] - preds
+        q = np.asarray(quantiles)
+        err = np.maximum(q * diff, (q - 1) * diff).mean(axis=1)
+
+        periods = X_test["half_hour_period"].to_numpy()
+        horizon_loss = [err[periods == s].mean() for s in range(48)]
+
+        for s, loss in enumerate(horizon_loss):
+            mlflow.log_metric("horizon_test_pinball_loss_mean", float(loss), step=s)
 
     return preds, pinball_losses
 
