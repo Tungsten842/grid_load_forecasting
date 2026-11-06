@@ -9,6 +9,13 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 
+from load_forecaster import (
+    INPUT_WINDOW,
+    OUTPUT_WINDOW,
+    TOTAL_WINDOW,
+    LoadForecaster,
+)
+
 
 class PinballLoss(nn.Module):
     def __init__(self, quantiles=(0.1, 0.5, 0.9)):
@@ -25,12 +32,6 @@ class PinballLoss(nn.Module):
         loss = q_loss.mean(dim=(0, 2))
         q_loss = q_loss.mean(dim=(0, 1))
         return loss, q_loss
-
-
-INPUT_WINDOW = 672
-GAP_WINDOW = 48
-OUTPUT_WINDOW = 48
-TOTAL_WINDOW = INPUT_WINDOW + GAP_WINDOW + OUTPUT_WINDOW
 
 
 class RandomWindowDataset(IterableDataset):
@@ -95,32 +96,6 @@ class RandomWindowDataset(IterableDataset):
                 yield w[:, :INPUT_WINDOW], w[:, -OUTPUT_WINDOW:]
 
 
-class LoadForecaster(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.l1 = nn.Linear(INPUT_WINDOW, 336 * 3)
-        self.l2 = nn.Linear(336 * 3, 336 * 3)
-        self.l3 = nn.Linear(336 * 3, 336 * 3)
-        self.l4 = nn.Linear(336 * 3, OUTPUT_WINDOW * 3)
-        self.act = nn.SiLU()
-
-    def forward(self, x):
-        mean = x.mean(dim=-1, keepdim=True)
-        std = x.std(dim=-1, keepdim=True) + 1e-5
-        x = (x - mean) / std
-
-        y = self.l1(x)
-        y = self.act(y)
-        y = self.l2(y)
-        y = self.act(y)
-        y = self.l3(y)
-        y = self.act(y)
-        y = self.l4(y)
-
-        y = y.reshape(-1, OUTPUT_WINDOW, 3)
-        return y * std.unsqueeze(-1) + mean.unsqueeze(-1)
-
-
 class LimitedIterableDataset(IterableDataset):
     def __init__(self, dataset, limit):
         self.dataset = dataset
@@ -134,7 +109,7 @@ class Trainer:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = LoadForecaster().to(self.device)
-        self.optimizer = Adam(self.model.parameters(), 0.00002)
+        self.optimizer = Adam(self.model.parameters(), 1e-4)
         self.loss_fn = PinballLoss().to(self.device)
 
         self.dataloaders = {}

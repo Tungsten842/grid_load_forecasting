@@ -9,13 +9,8 @@ import streamlit as st
 import torch
 from sklearn.metrics import mean_pinball_loss
 
-from train_nn import (
-    GAP_WINDOW,
-    INPUT_WINDOW,
-    OUTPUT_WINDOW,
-    TOTAL_WINDOW,
-    LoadForecaster,
-)
+from load_forecaster import GAP_WINDOW, INPUT_WINDOW, OUTPUT_WINDOW, TOTAL_WINDOW
+from train_nn import LoadForecaster
 from train_tree import MultiQuantileLGBM, prepare_dataset  # noqa
 
 warnings.filterwarnings("ignore")
