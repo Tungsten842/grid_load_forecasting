@@ -111,9 +111,10 @@ class LimitedIterableDataset(IterableDataset):
 
 class Trainer:
     def __init__(self):
+        torch.set_float32_matmul_precision("high")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = LoadForecaster().to(self.device)
-        self.optimizer = Adam(self.model.parameters(), 1e-4)
+        self.optimizer = Adam(self.model.parameters(), 1e-4, fused=True)
         self.loss_fn = PinballLoss().to(self.device)
 
         self.dataloaders = {}
@@ -165,8 +166,8 @@ class Trainer:
             total_samples = 0
             for batch in self.dataloaders["train"]:
                 inputs, targets = batch
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                inputs = inputs.to(self.device, non_blocking=True)
+                targets = targets.to(self.device, non_blocking=True)
 
                 self.optimizer.zero_grad()
                 batch_size = inputs.size(0)
@@ -216,13 +217,17 @@ class Trainer:
             total_samples = 0
             for batch in self.dataloaders[split]:
                 inputs, targets = batch
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                inputs = inputs.to(self.device, non_blocking=True)
+                targets = targets.to(self.device, non_blocking=True)
 
                 batch_size = inputs.size(0)
                 val_pbar.update(batch_size)
-                targets_pred = self.model(inputs)
-                raw_loss, q_loss = self.loss_fn(targets_pred, targets)
+                with (
+                    torch.inference_mode(),
+                    torch.autocast(device_type=self.device, dtype=torch.bfloat16),
+                ):
+                    targets_pred = self.model(inputs)
+                    raw_loss, q_loss = self.loss_fn(targets_pred, targets)
                 test_loss = raw_loss.mean()
 
                 total_val_loss += test_loss.item() * batch_size
