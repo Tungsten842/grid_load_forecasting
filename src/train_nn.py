@@ -1,3 +1,4 @@
+import argparse
 from itertools import islice, pairwise
 
 import mlflow
@@ -253,7 +254,11 @@ class Trainer:
 
 
 def main():
-    mlflow.set_experiment("NN")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("experiment_name", type=str)
+    args = parser.parse_args()
+
+    mlflow.set_experiment(args.experiment_name)
     trainer = Trainer()
     trainer.fit()
     trainer.save()
