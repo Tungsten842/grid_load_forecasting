@@ -1039,6 +1039,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "scikit-learn" },
     { name = "streamlit" },
+    { name = "torchinfo" },
     { name = "tqdm" },
 ]
 
@@ -1070,6 +1071,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "grid-load-forecasting", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cuda'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "grid-load-forecasting", extra = "cuda" } },
     { name = "torch", marker = "extra == 'rocm'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "grid-load-forecasting", extra = "rocm" } },
+    { name = "torchinfo", specifier = ">=1.8.0" },
     { name = "tqdm", specifier = ">=4.70.1" },
     { name = "triton-rocm", marker = "extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "grid-load-forecasting", extra = "rocm" } },
 ]
@@ -3181,6 +3183,15 @@ wheels = [
     { url = "https://download-r2.pytorch.org/whl/rocm7.2/torch-2.14.1%2Brocm7.2-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:6dd7167b37fc456bb440dbdb8d5e928796ab0c40fe616cddc8760ee211579b31", upload-time = "2026-09-30T21:52:12Z" },
     { url = "https://download-r2.pytorch.org/whl/rocm7.2/torch-2.14.1%2Brocm7.2-cp315-cp315-manylinux_2_28_x86_64.whl", hash = "sha256:6f2a470ff980212d6c0a53e69b60421204450c7c3adb14b96767e876d48e6c28", upload-time = "2026-09-30T21:55:16Z" },
     { url = "https://download-r2.pytorch.org/whl/rocm7.2/torch-2.14.1%2Brocm7.2-cp315-cp315t-manylinux_2_28_x86_64.whl", hash = "sha256:91fd94c2f7127fc93523ee32654949f1888f50ee56db3ae0f9a319f70116ddb0", upload-time = "2026-09-30T21:58:14Z" },
+]
+
+[[package]]
+name = "torchinfo"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/d9/2b811d1c0812e9ef23e6cf2dbe022becbe6c5ab065e33fd80ee05c0cd996/torchinfo-1.8.0.tar.gz", hash = "sha256:72e94b0e9a3e64dc583a8e5b7940b8938a1ac0f033f795457f27e6f4e7afa2e9", size = 25880, upload-time = "2023-05-14T19:23:26.377Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/72/25/973bd6128381951b23cdcd8a9870c6dcfc5606cb864df8eabd82e529f9c1/torchinfo-1.8.0-py3-none-any.whl", hash = "sha256:2e911c2918603f945c26ff21a3a838d12709223dc4ccf243407bce8b6e897b46", size = 23377, upload-time = "2023-05-14T19:23:24.141Z" },
 ]
 
 [[package]]

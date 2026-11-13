@@ -8,69 +8,113 @@ TOTAL_WINDOW = INPUT_WINDOW + GAP_WINDOW + OUTPUT_WINDOW
 
 
 class RevIN(nn.Module):
-    def __init__(self):
+    def __init__(self, dim=1):
         super().__init__()
-        self.alpha = nn.Parameter(torch.ones(1), requires_grad=True)
-        self.beta = nn.Parameter(torch.zeros(1), requires_grad=True)
+        self.dim = dim
 
     def normalize(self, x):
-        mean = x.mean(dim=-1, keepdim=True).detach()
-        std = x.std(dim=-1, keepdim=True).detach() + 1e-5
+        mean = x.mean(dim=self.dim, keepdim=True).detach()
 
-        x = self.alpha * ((x - mean) / std) + self.beta
+        var = torch.var(x, dim=self.dim, keepdim=True, unbiased=False)
+        std = torch.sqrt(var + 1e-5).detach()
+
+        x = (x - mean) / std
         return x, mean, std
 
     def denormalize(self, y, mean, std):
-        y = std * ((y - self.beta) / self.alpha) + mean
+        y = std * y + mean
         return y
 
 
 class EMBED(nn.Module):
-    def __init__(self, d_model):
+    def __init__(self, input_length, d_model):
         super().__init__()
-        self.embed = nn.Sequential(
-            nn.Linear(INPUT_WINDOW, d_model),
-        )
+        self.embed = nn.Linear(input_length, d_model)
 
     def forward(self, x):
         return self.embed(x)
 
 
 class TGM(nn.Module):
-    def __init__(self, d_model, t_ff):
+    def __init__(self, d_model, hidden_size):
         super().__init__()
-        self.tgm = nn.Sequential(
-            nn.Linear(d_model, t_ff),
+        self.gate = nn.Sequential(
+            nn.Linear(d_model, hidden_size),
             nn.ReLU(),
-            nn.Linear(t_ff, d_model),
+            nn.Linear(hidden_size, d_model),
             nn.Sigmoid(),
         )
 
-    def forward(self, x):
-        x = self.tgm(x) * x
-        return x
+    def forward(self, endo, glob):
+        endo_token = torch.cat([endo, glob], -1)
+        endo_token = self.gate(endo_token) * endo_token
+
+        endo_size = endo.shape[-1]
+        endo = endo_token[..., :endo_size]
+        glob = endo_token[..., endo_size:]
+        return endo, glob
+
+
+class VGM(nn.Module):
+    def __init__(self, num_vars, hidden_size):
+        super().__init__()
+        self.gate = nn.Sequential(
+            nn.Linear(num_vars, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, num_vars),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, exo, glob):
+        exo_token = torch.cat([exo, glob], 1).transpose(1, 2)
+        exo_token = self.gate(exo_token) * exo_token
+
+        exo_token = exo_token.transpose(1, 2)
+        exo = exo_token[:, :-1, :]
+        glob = exo_token[:, -1:, :]
+        return exo, glob
 
 
 class LoadForecaster(nn.Module):
-    def __init__(self, embed_size=1024):
+    def __init__(
+        self,
+        input_length=INPUT_WINDOW,
+        output_length=OUTPUT_WINDOW,
+        embed_size=512,
+        num_vars=3,
+        num_quantiles=3,
+    ):
         super().__init__()
+        self.output_length = output_length
+
         self.revin = RevIN()
 
-        self.embed = EMBED(embed_size)
-        self.tgm = TGM(embed_size, embed_size * 2)
+        self.embed = EMBED(input_length, embed_size)
+        self.quantiles = num_quantiles
 
-        self.head = nn.Linear(embed_size, OUTPUT_WINDOW * 3)
+        self.glob1 = nn.Parameter(torch.randn(1, 1, embed_size))
+
+        self.tgm = TGM(embed_size * 2, embed_size * 2)
+        self.vgm = VGM(num_vars, embed_size * 2)
+
+        self.head = nn.Linear(embed_size * 2, OUTPUT_WINDOW * num_quantiles)
 
     def forward(self, x):
-        y, mean, std = self.revin.normalize(x)
+        endo1, mean, std = self.revin.normalize(x[:, :, 0:1])
+        exo1 = self.revin.normalize(x[:, :, 1:])[0]
 
-        x_endo1 = self.embed(y)
+        endo1 = self.embed(endo1.transpose(1, 2))
+        exo1 = self.embed(exo1.transpose(1, 2))
 
-        x_endo2 = self.tgm(x_endo1)
+        glob1 = self.glob1.expand_as(endo1)
 
-        y = self.head(x_endo2)
+        endo2, glob2 = self.tgm(endo1, glob1)
+
+        glob3 = self.vgm(exo1, glob2)[1]
+
+        y = self.head(torch.cat([endo2, glob3], -1))
 
         y = self.revin.denormalize(y, mean, std)
 
-        y = y.reshape(-1, OUTPUT_WINDOW, 3)
+        y = y.reshape(-1, self.output_length, self.quantiles)
         return y
