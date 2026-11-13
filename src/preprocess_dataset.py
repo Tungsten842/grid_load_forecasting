@@ -26,8 +26,6 @@ def get_weather(lf):
             conn,
         )
 
-    # available = pl.scan_parquet(files).select("station").unique().collect()
-
     available = (
         pl.scan_parquet(files)
         .filter(

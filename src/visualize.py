@@ -133,26 +133,43 @@ def main():
     nn_model.eval()
 
     n_series = 40
-    X, y = prepare_dataset(Path("dataset/test.parquet"), n_series, True)
+    X, y = prepare_dataset(
+        Path("dataset/test.parquet"), n_series, True, drop_columns=False
+    )
 
     full_df = X.with_columns(_y=y).filter(
         pl.len().over("lv_feeder_unique_id") >= TOTAL_WINDOW
     )
 
     full_series = (
-        full_df.group_by("lv_feeder_unique_id", maintain_order=True)
-        .agg(pl.col("_y").cast(pl.Float32).head(TOTAL_WINDOW))
-        .select(pl.col("_y").list.to_array(TOTAL_WINDOW))
-        .to_series()
-        .to_torch()
+        full_df.select("_y", "lv_feeder_unique_id", "temperature", "humidity")
+        .group_by("lv_feeder_unique_id", maintain_order=True)
+        .agg(
+            pl.col("_y").cast(pl.Float32).head(TOTAL_WINDOW),
+            pl.col("temperature").cast(pl.Float32).head(TOTAL_WINDOW),
+            pl.col("humidity").cast(pl.Float32).head(TOTAL_WINDOW),
+        )
+        .select(pl.col("_y", "temperature", "humidity").list.to_array(TOTAL_WINDOW))
     )
-    nn_inputs = full_series[:, :INPUT_WINDOW]
+    nn_inputs = torch.stack(
+        [full_series[c].to_torch() for c in ["_y", "temperature", "humidity"]],
+        dim=1,
+    )[..., :INPUT_WINDOW].transpose(1, 2)
 
-    df = full_df.filter(
-        pl.int_range(pl.len())
-        .over("lv_feeder_unique_id")
-        .is_between(INPUT_WINDOW + GAP_WINDOW, TOTAL_WINDOW - 1)
-    ).with_row_index()
+    df = (
+        full_df.drop(
+            "data_collection_log_timestamp",
+            "temperature",
+            "humidity",
+            "aggregated_device_count_active",
+        )
+        .filter(
+            pl.int_range(pl.len())
+            .over("lv_feeder_unique_id")
+            .is_between(INPUT_WINDOW + GAP_WINDOW, TOTAL_WINDOW - 1)
+        )
+        .with_row_index()
+    )
 
     series_chunks = [
         idx.to_numpy()
@@ -186,7 +203,7 @@ def main():
         )
 
         fig = build_forecast_plot(
-            y_true=full_series[i],
+            y_true=full_series["_y"][i],
             lgb_pred=lgb_preds[idx],
             nn_pred=nn_preds[i],
             quantiles=quantiles,

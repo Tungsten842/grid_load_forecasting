@@ -78,7 +78,7 @@ def prepare_features(lf, group_id, ts_name, target_name):
     return lf.with_columns(new_features)
 
 
-def prepare_dataset(file, n_series=None, return_unique_id=False):
+def prepare_dataset(file, n_series=None, return_unique_id=False, drop_columns=True):
     group_id = "lv_feeder_unique_id"
     ts_name = "data_collection_log_timestamp"
     target_name = "mean_consumption_per_meter"
@@ -91,11 +91,18 @@ def prepare_dataset(file, n_series=None, return_unique_id=False):
 
     lf = prepare_features(lf, group_id, ts_name, target_name)
 
-    drop_cols = [ts_name, "temperature", "humidity", "aggregated_device_count_active"]
-    if not return_unique_id:
-        drop_cols.append(group_id)
+    if drop_columns:
+        drop_cols = [
+            ts_name,
+            "temperature",
+            "humidity",
+            "aggregated_device_count_active",
+        ]
+        if not return_unique_id:
+            drop_cols.append(group_id)
 
-    df = lf.drop(drop_cols).drop_nulls().collect()
+        lf = lf.drop(drop_cols)
+    df = lf.drop_nulls().collect()
     print(df.schema)
 
     X = df.drop(target_name)
