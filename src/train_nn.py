@@ -111,7 +111,7 @@ class LimitedIterableDataset(IterableDataset):
 
 class Trainer:
     def __init__(self):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = LoadForecaster().to(self.device)
         self.optimizer = Adam(self.model.parameters(), 1e-4)
         self.loss_fn = PinballLoss().to(self.device)
@@ -171,8 +171,10 @@ class Trainer:
                 self.optimizer.zero_grad()
                 batch_size = inputs.size(0)
                 pbar.update(batch_size)
-                targets_pred = self.model(inputs)
-                train_loss_raw, q_loss = self.loss_fn(targets_pred, targets)
+                with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
+                    targets_pred = self.model(inputs)
+                    train_loss_raw, q_loss = self.loss_fn(targets_pred, targets)
+
                 train_loss = train_loss_raw.mean()
                 train_loss.backward()
                 self.optimizer.step()
