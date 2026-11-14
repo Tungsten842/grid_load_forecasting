@@ -78,11 +78,13 @@ class VGM(nn.Module):
 class LoadForecaster(nn.Module):
     def __init__(
         self,
-        input_length=INPUT_WINDOW,
-        output_length=OUTPUT_WINDOW,
-        embed_size=512,
-        num_vars=3,
-        num_quantiles=3,
+        input_length,
+        output_length,
+        tff_hidden,
+        cff_hidden,
+        embed_size,
+        num_vars,
+        num_quantiles,
     ):
         super().__init__()
         self.output_length = output_length
@@ -94,10 +96,10 @@ class LoadForecaster(nn.Module):
 
         self.glob1 = nn.Parameter(torch.randn(1, 1, embed_size))
 
-        self.tgm = TGM(embed_size * 2, embed_size * 2)
-        self.vgm = VGM(num_vars, embed_size * 2)
+        self.tgm = TGM(embed_size * 2, tff_hidden)
+        self.vgm = VGM(num_vars, cff_hidden)
 
-        self.head = nn.Linear(embed_size * 2, OUTPUT_WINDOW * num_quantiles)
+        self.head = nn.Linear(embed_size * 2, output_length * num_quantiles)
 
     def forward(self, x):
         endo1, mean, std = self.revin.normalize(x[:, :, 0:1])

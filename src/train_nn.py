@@ -113,8 +113,34 @@ class Trainer:
     def __init__(self):
         torch.set_float32_matmul_precision("high")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = LoadForecaster().to(self.device)
-        self.optimizer = Adam(self.model.parameters(), 1e-4, fused=True)
+
+        self.hyperparams = {
+            # Model params
+            "input_length": INPUT_WINDOW,
+            "output_length": OUTPUT_WINDOW,
+            "tff_hidden": 1024,
+            "cff_hidden": 1024,
+            "embed_size": 512,
+            "num_vars": 3,
+            "num_quantiles": 3,
+            # Training params
+            "learning_rate": 1e-4,
+            "batch_size": 128,
+        }
+
+        self.model = LoadForecaster(
+            input_length=self.hyperparams["input_length"],
+            output_length=self.hyperparams["output_length"],
+            tff_hidden=self.hyperparams["tff_hidden"],
+            cff_hidden=self.hyperparams["cff_hidden"],
+            embed_size=self.hyperparams["embed_size"],
+            num_vars=self.hyperparams["num_vars"],
+            num_quantiles=self.hyperparams["num_quantiles"],
+        ).to(self.device)
+
+        self.optimizer = Adam(
+            self.model.parameters(), self.hyperparams["learning_rate"], fused=True
+        )
         self.loss_fn = PinballLoss().to(self.device)
 
         self.dataloaders = {}
@@ -122,7 +148,7 @@ class Trainer:
         summary(self.model, input_size=((128, INPUT_WINDOW, 3)))
 
         train_dataset = RandomWindowDataset(
-            "dataset/train.parquet", 128, drop_last=True
+            "dataset/train.parquet", self.hyperparams["batch_size"], drop_last=True
         )
         train_dataset = LimitedIterableDataset(train_dataset, 32768)
         self.dataloaders["train"] = DataLoader(
@@ -132,7 +158,9 @@ class Trainer:
             pin_memory=True,
         )
 
-        val_dataset = RandomWindowDataset("dataset/val.parquet", 128)
+        val_dataset = RandomWindowDataset(
+            "dataset/val.parquet", self.hyperparams["batch_size"]
+        )
         self.dataloaders["val"] = DataLoader(
             val_dataset,
             batch_size=None,
@@ -141,7 +169,9 @@ class Trainer:
             pin_memory=True,
         )
 
-        test_dataset = RandomWindowDataset("dataset/test.parquet", 128)
+        test_dataset = RandomWindowDataset(
+            "dataset/test.parquet", self.hyperparams["batch_size"]
+        )
         self.dataloaders["test"] = DataLoader(
             test_dataset,
             batch_size=None,
@@ -161,6 +191,8 @@ class Trainer:
         pbar = tqdm(desc="train", unit="sample", unit_scale=True)
 
         with mlflow.start_run():
+            mlflow.log_params(self.hyperparams)
+            mlflow.log_artifacts("src/")
             running_train_loss = 0.0
             running_q_loss = 0.0
             running_samples = 0
@@ -258,7 +290,9 @@ class Trainer:
             return val_loss
 
     def save(self):
-        torch.save(self.model.state_dict(), "model.pt")
+        mlflow.pytorch.log_model(
+            name="model", pytorch_model=self.model, serialization_format="pickle"
+        )
 
 
 def main():

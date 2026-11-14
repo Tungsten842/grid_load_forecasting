@@ -2,6 +2,7 @@ import warnings
 from pathlib import Path
 
 import joblib
+import mlflow
 import numpy as np
 import plotly.graph_objects as go
 import polars as pl
@@ -128,7 +129,17 @@ def main():
     lgb_model = joblib.load("lgb_model.pkl")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    nn_model = LoadForecaster().to(device)
+
+    last_experiment_id = mlflow.search_experiments(
+        order_by=["creation_time DESC"], max_results=1
+    )[0].experiment_id
+    models = mlflow.search_logged_models(
+        experiment_ids=[last_experiment_id],
+        order_by=[{"field_name": "creation_time", "ascending": False}],
+        max_results=1,
+        output_format="list",
+    )
+    nn_model = mlflow.pytorch.load_model(models[0].model_uri)
     nn_model.load_state_dict(torch.load("model.pt"))
     nn_model.eval()
 
