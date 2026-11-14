@@ -119,7 +119,7 @@ class Trainer:
             "input_length": INPUT_WINDOW,
             "output_length": OUTPUT_WINDOW,
             "tff_hidden": 1024,
-            "cff_hidden": 1024,
+            "cff_hidden": 64,
             "embed_size": 512,
             "num_vars": 3,
             "num_quantiles": 3,
