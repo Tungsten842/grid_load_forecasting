@@ -40,10 +40,11 @@ class RandomWindowDataset(IterableDataset):
     CHUNK_ROWS = 4194304
     FEEDER_COL = "lv_feeder_unique_id"
 
-    def __init__(self, path, batch_size, n_meters=None):
+    def __init__(self, path, batch_size, n_meters=None, drop_last=False):
         super().__init__()
         self.SERIES_COLS = ["mean_consumption_per_meter", "temperature", "humidity"]
         self.batch_size = batch_size
+        self.drop_last = drop_last
 
         self.lf = pl.scan_parquet(str(path)).select(
             [self.FEEDER_COL, *self.SERIES_COLS]
@@ -93,8 +94,7 @@ class RandomWindowDataset(IterableDataset):
             starts_t = torch.from_numpy(starts)
             for i in range(0, len(starts_t), self.batch_size):
                 b = starts_t[i : i + self.batch_size, None]
-                # Drop partial batches
-                if len(b) < self.batch_size:
+                if self.drop_last and len(b) < self.batch_size:
                     continue
                 w = vals[b + w_idx]
                 yield w[:, :INPUT_WINDOW, :], w[:, -OUTPUT_WINDOW:, 0]
@@ -121,13 +121,14 @@ class Trainer:
 
         summary(self.model, input_size=((128, INPUT_WINDOW, 3)))
 
-        train_dataset = RandomWindowDataset("dataset/train.parquet", 128)
+        train_dataset = RandomWindowDataset(
+            "dataset/train.parquet", 128, drop_last=True
+        )
         train_dataset = LimitedIterableDataset(train_dataset, 32768)
         self.dataloaders["train"] = DataLoader(
             train_dataset,
             batch_size=None,
             num_workers=0,
-            persistent_workers=False,
             pin_memory=True,
         )
 
