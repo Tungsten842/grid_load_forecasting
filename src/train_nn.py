@@ -1,5 +1,8 @@
+import os
+
+os.environ["POLARS_MAX_THREADS"] = "4"
 import argparse
-from itertools import islice, pairwise
+from itertools import chain, islice, pairwise
 
 import mlflow
 import numpy as np
@@ -8,7 +11,6 @@ import torch
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader, IterableDataset
-from torchinfo import summary
 from tqdm import tqdm
 
 from load_forecaster import (
@@ -37,13 +39,14 @@ class PinballLoss(nn.Module):
 
 
 class RandomWindowDataset(IterableDataset):
-    CHUNK_ROWS = 4194304
+    CHUNK_ROWS = 2**25
     FEEDER_COL = "lv_feeder_unique_id"
 
     def __init__(self, path, batch_size, n_meters=None, drop_last=False):
         super().__init__()
         self.SERIES_COLS = ["mean_consumption_per_meter", "temperature", "humidity"]
         self.batch_size = batch_size
+        self.macro_batch_size = batch_size * 32
         self.drop_last = drop_last
 
         self.lf = pl.scan_parquet(str(path)).select(
@@ -63,7 +66,10 @@ class RandomWindowDataset(IterableDataset):
 
     def __iter__(self):
         w_idx = torch.arange(TOTAL_WINDOW)
-        for offset in range(0, self.total_rows, self.CHUNK_ROWS):
+        info = torch.utils.data.get_worker_info()
+        start = 0 if not info else info.id * self.CHUNK_ROWS
+        step = self.CHUNK_ROWS * (1 if not info else info.num_workers)
+        for offset in range(start, self.total_rows, step):
             df = self.lf.slice(offset, self.CHUNK_ROWS).collect()
 
             if df.is_empty():
@@ -92,12 +98,16 @@ class RandomWindowDataset(IterableDataset):
             np.random.shuffle(starts)
 
             starts_t = torch.from_numpy(starts)
-            for i in range(0, len(starts_t), self.batch_size):
-                b = starts_t[i : i + self.batch_size, None]
-                if self.drop_last and len(b) < self.batch_size:
+            for i in range(0, len(starts_t), self.macro_batch_size):
+                b = starts_t[i : i + self.macro_batch_size]
+                n = len(b) // self.batch_size
+                if (self.drop_last and len(b) < self.macro_batch_size) or n == 0:
                     continue
-                w = vals[b + w_idx]
-                yield w[:, :INPUT_WINDOW, :], w[:, -OUTPUT_WINDOW:, 0]
+
+                w = vals[b[: n * self.batch_size, None] + w_idx]
+                x = w[:, :INPUT_WINDOW].reshape(n, self.batch_size, INPUT_WINDOW, -1)
+                y = w[:, -OUTPUT_WINDOW:, 0].reshape(n, self.batch_size, OUTPUT_WINDOW)
+                yield x, y
 
 
 class LimitedIterableDataset(IterableDataset):
@@ -145,16 +155,15 @@ class Trainer:
 
         self.dataloaders = {}
 
-        summary(self.model, input_size=((128, INPUT_WINDOW, 3)))
-
         train_dataset = RandomWindowDataset(
             "dataset/train.parquet", self.hyperparams["batch_size"], drop_last=True
         )
-        train_dataset = LimitedIterableDataset(train_dataset, 32768)
+        train_dataset = LimitedIterableDataset(train_dataset, 512)
         self.dataloaders["train"] = DataLoader(
             train_dataset,
             batch_size=None,
-            num_workers=0,
+            num_workers=2,
+            persistent_workers=True,
             pin_memory=True,
         )
 
@@ -164,7 +173,7 @@ class Trainer:
         self.dataloaders["val"] = DataLoader(
             val_dataset,
             batch_size=None,
-            num_workers=1,
+            num_workers=2,
             persistent_workers=True,
             pin_memory=True,
         )
@@ -175,7 +184,7 @@ class Trainer:
         self.dataloaders["test"] = DataLoader(
             test_dataset,
             batch_size=None,
-            num_workers=1,
+            num_workers=2,
             pin_memory=True,
         )
 
@@ -183,7 +192,7 @@ class Trainer:
         self.dataloaders["test_unseen"] = DataLoader(
             test_unseen_dataset,
             batch_size=None,
-            num_workers=1,
+            num_workers=2,
             pin_memory=True,
         )
 
@@ -197,11 +206,15 @@ class Trainer:
             running_q_loss = 0.0
             running_samples = 0
             total_samples = 0
-            for batch in self.dataloaders["train"]:
-                inputs, targets = batch
-                inputs = inputs.to(self.device, non_blocking=True)
-                targets = targets.to(self.device, non_blocking=True)
+            batches = chain.from_iterable(
+                zip(
+                    inputs_macro.to(self.device, non_blocking=True),
+                    target_macro.to(self.device, non_blocking=True),
+                )
+                for inputs_macro, target_macro in self.dataloaders["train"]
+            )
 
+            for inputs, targets in batches:
                 self.optimizer.zero_grad()
                 batch_size = inputs.size(0)
                 pbar.update(batch_size)
@@ -213,7 +226,7 @@ class Trainer:
                 train_loss.backward()
                 self.optimizer.step()
 
-                running_train_loss += train_loss.item() * batch_size
+                running_train_loss += train_loss.detach() * batch_size
                 running_q_loss += q_loss.detach() * batch_size
                 running_samples += batch_size
                 total_samples += batch_size
@@ -248,8 +261,14 @@ class Trainer:
             running_q_loss = 0.0
             val_pbar = tqdm(desc="val", unit="sample", unit_scale=True, leave=False)
             total_samples = 0
-            for batch in self.dataloaders[split]:
-                inputs, targets = batch
+            batches = chain.from_iterable(
+                zip(
+                    inputs_macro.to(self.device, non_blocking=True),
+                    target_macro.to(self.device, non_blocking=True),
+                )
+                for inputs_macro, target_macro in self.dataloaders[split]
+            )
+            for inputs, targets in batches:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
 
@@ -263,8 +282,8 @@ class Trainer:
                     raw_loss, q_loss = self.loss_fn(targets_pred, targets)
                 test_loss = raw_loss.mean()
 
-                total_val_loss += test_loss.item() * batch_size
-                running_q_loss += q_loss * batch_size
+                total_val_loss += test_loss.detach() * batch_size
+                running_q_loss += q_loss.detach() * batch_size
                 if split == "test":
                     running_raw_loss += raw_loss * batch_size
                 total_samples += batch_size

@@ -105,8 +105,10 @@ class LoadForecaster(nn.Module):
         endo1, mean, std = self.revin.normalize(x[:, :, 0:1])
         exo1 = self.revin.normalize(x[:, :, 1:])[0]
 
-        endo1 = self.embed(endo1.transpose(1, 2))
-        exo1 = self.embed(exo1.transpose(1, 2))
+        combined = torch.cat([endo1, exo1], dim=2)
+        combined = self.embed(combined.transpose(1, 2))
+        endo1 = combined[:, 0:1, :]
+        exo1 = combined[:, 1:, :]
 
         glob1 = self.glob1.expand_as(endo1)
 
