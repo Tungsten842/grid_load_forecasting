@@ -120,3 +120,29 @@ class LoadForecaster(nn.Module):
 
         y = y.reshape(-1, self.output_length, self.quantiles)
         return y
+
+
+class ToyLoadForecaster(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l1 = nn.Linear(INPUT_WINDOW, 336 * 3)
+        self.l2 = nn.Linear(336 * 3, 336 * 3)
+        self.l3 = nn.Linear(336 * 3, 336 * 3)
+        self.l4 = nn.Linear(336 * 3, OUTPUT_WINDOW * 3)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        mean = x.mean(dim=-1, keepdim=True)
+        std = x.std(dim=-1, keepdim=True) + 1e-5
+        x = (x - mean) / std
+
+        y = self.l1(x)
+        y = self.act(y)
+        y = self.l2(y)
+        y = self.act(y)
+        y = self.l3(y)
+        y = self.act(y)
+        y = self.l4(y)
+
+        y = y.reshape(-1, OUTPUT_WINDOW, 3)
+        return y * std.unsqueeze(-1) + mean.unsqueeze(-1)
