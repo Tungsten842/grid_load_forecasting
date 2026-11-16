@@ -136,6 +136,7 @@ class Trainer:
             # Training params
             "learning_rate": 1e-4,
             "batch_size": 128,
+            "dropout": 0.05,
         }
 
         self.model = LoadForecaster(
@@ -146,6 +147,7 @@ class Trainer:
             embed_size=self.hyperparams["embed_size"],
             num_vars=self.hyperparams["num_vars"],
             num_quantiles=self.hyperparams["num_quantiles"],
+            dropout=self.hyperparams["dropout"],
         ).to(self.device)
 
         self.optimizer = Adam(

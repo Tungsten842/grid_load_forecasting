@@ -27,20 +27,23 @@ class RevIN(nn.Module):
 
 
 class EMBED(nn.Module):
-    def __init__(self, input_length, d_model):
+    def __init__(self, input_length, d_model, dropout):
         super().__init__()
+        self.dropout = nn.Dropout(dropout)
         self.embed = nn.Linear(input_length, d_model)
 
     def forward(self, x):
+        x = self.dropout(x)
         return self.embed(x)
 
 
 class TGM(nn.Module):
-    def __init__(self, d_model, hidden_size):
+    def __init__(self, d_model, hidden_size, dropout):
         super().__init__()
         self.gate = nn.Sequential(
             nn.Linear(d_model, hidden_size),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_size, d_model),
             nn.Sigmoid(),
         )
@@ -56,11 +59,12 @@ class TGM(nn.Module):
 
 
 class VGM(nn.Module):
-    def __init__(self, num_vars, hidden_size):
+    def __init__(self, num_vars, hidden_size, dropout):
         super().__init__()
         self.gate = nn.Sequential(
             nn.Linear(num_vars, hidden_size),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_size, num_vars),
             nn.Sigmoid(),
         )
@@ -85,21 +89,25 @@ class LoadForecaster(nn.Module):
         embed_size,
         num_vars,
         num_quantiles,
+        dropout,
     ):
         super().__init__()
         self.output_length = output_length
 
         self.revin = RevIN()
 
-        self.embed = EMBED(input_length, embed_size)
+        self.embed = EMBED(input_length, embed_size, dropout)
         self.quantiles = num_quantiles
 
         self.glob1 = nn.Parameter(torch.randn(1, 1, embed_size))
 
-        self.tgm = TGM(embed_size * 2, tff_hidden)
-        self.vgm = VGM(num_vars, cff_hidden)
+        self.tgm = TGM(embed_size * 2, tff_hidden, dropout)
+        self.vgm = VGM(num_vars, cff_hidden, dropout)
 
-        self.head = nn.Linear(embed_size * 2, output_length * num_quantiles)
+        self.head = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(embed_size * 2, output_length * num_quantiles),
+        )
 
     def forward(self, x):
         endo1, mean, std = self.revin.normalize(x[:, :, 0:1])
