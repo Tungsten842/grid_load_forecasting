@@ -46,7 +46,7 @@ class RandomWindowDataset(IterableDataset):
         super().__init__()
         self.SERIES_COLS = ["mean_consumption_per_meter", "temperature", "humidity"]
         self.batch_size = batch_size
-        self.macro_batch_size = batch_size * 32
+        self.macro_batch_size = batch_size * 8
         self.drop_last = drop_last
 
         self.lf = pl.scan_parquet(str(path)).select(
@@ -134,8 +134,8 @@ class Trainer:
             "num_vars": 3,
             "num_quantiles": 3,
             # Training params
-            "learning_rate": 1e-4,
-            "batch_size": 128,
+            "learning_rate": 4e-4,
+            "batch_size": 2048,
             "dropout": 0.05,
         }
 
@@ -160,11 +160,11 @@ class Trainer:
         train_dataset = RandomWindowDataset(
             "dataset/train.parquet", self.hyperparams["batch_size"], drop_last=True
         )
-        train_dataset = LimitedIterableDataset(train_dataset, 512)
+        train_dataset = LimitedIterableDataset(train_dataset, 64)
         self.dataloaders["train"] = DataLoader(
             train_dataset,
             batch_size=None,
-            num_workers=2,
+            num_workers=4,
             persistent_workers=True,
             pin_memory=True,
         )
@@ -175,7 +175,7 @@ class Trainer:
         self.dataloaders["val"] = DataLoader(
             val_dataset,
             batch_size=None,
-            num_workers=2,
+            num_workers=4,
             persistent_workers=True,
             pin_memory=True,
         )
@@ -186,7 +186,7 @@ class Trainer:
         self.dataloaders["test"] = DataLoader(
             test_dataset,
             batch_size=None,
-            num_workers=2,
+            num_workers=4,
             pin_memory=True,
         )
 
@@ -194,7 +194,7 @@ class Trainer:
         self.dataloaders["test_unseen"] = DataLoader(
             test_unseen_dataset,
             batch_size=None,
-            num_workers=2,
+            num_workers=4,
             pin_memory=True,
         )
 
