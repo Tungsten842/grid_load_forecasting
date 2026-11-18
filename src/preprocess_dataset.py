@@ -140,9 +140,9 @@ def main():
     # Drop null feeders and wrong measurments
     bad_feeders = (
         lf.filter(
-            pl.col("mean_consumption_per_meter").is_null()
-            | (pl.col("mean_consumption_per_meter") > 20000)
+            (pl.col("mean_consumption_per_meter") > 20000)
             | pl.col("latitude").is_nan()
+            | pl.col("latitude").is_null()
         )
         .select("lv_feeder_unique_id")
         .unique()

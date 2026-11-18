@@ -9,6 +9,7 @@ import numpy as np
 import polars as pl
 import torch
 from torch import nn
+from torch.functional import F
 from torch.optim import Adam
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
@@ -39,7 +40,7 @@ class PinballLoss(nn.Module):
 
 
 class RandomWindowDataset(IterableDataset):
-    CHUNK_ROWS = 2**25
+    CHUNK_ROWS = 2**27
     FEEDER_COL = "lv_feeder_unique_id"
 
     def __init__(self, path, batch_size, n_meters=None, drop_last=False):
@@ -97,7 +98,11 @@ class RandomWindowDataset(IterableDataset):
             starts = np.concatenate(valid_starts)
             np.random.shuffle(starts)
 
-            starts_t = torch.from_numpy(starts)
+            bad = ~torch.isfinite(vals).all(dim=1)
+            bad_before = F.pad(bad.cumsum(0), (1, 0))
+            starts = torch.from_numpy(starts)
+            starts_t = starts[bad_before[starts + TOTAL_WINDOW] == bad_before[starts]]
+
             for i in range(0, len(starts_t), self.macro_batch_size):
                 b = starts_t[i : i + self.macro_batch_size]
                 n = len(b) // self.batch_size
@@ -233,7 +238,7 @@ class Trainer:
                 running_samples += batch_size
                 total_samples += batch_size
 
-                if total_samples % 32768 == 0 and total_samples > 0:
+                if total_samples % 65536 == 0 and total_samples > 0:
                     running_train_loss /= running_samples
                     pbar.set_postfix(loss=f"{running_train_loss:.1f}", refresh=False)
                     metrics = {"train_pinball_loss_mean": running_train_loss}
@@ -247,7 +252,7 @@ class Trainer:
                     running_train_loss = 0.0
                     running_q_loss = 0.0
                     running_samples = 0
-                if total_samples % 2097152 == 0 and total_samples > 0:
+                if total_samples % 4194304 == 0 and total_samples > 0:
                     self.evaluate("val", total_samples)
             pbar.close()
 
@@ -271,9 +276,6 @@ class Trainer:
                 for inputs_macro, target_macro in self.dataloaders[split]
             )
             for inputs, targets in batches:
-                inputs = inputs.to(self.device, non_blocking=True)
-                targets = targets.to(self.device, non_blocking=True)
-
                 batch_size = inputs.size(0)
                 val_pbar.update(batch_size)
                 with (
