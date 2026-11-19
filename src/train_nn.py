@@ -2,6 +2,7 @@ import os
 
 os.environ["POLARS_MAX_THREADS"] = "4"
 import argparse
+import time
 from itertools import chain, islice, pairwise
 
 import mlflow
@@ -165,7 +166,7 @@ class Trainer:
         train_dataset = RandomWindowDataset(
             "dataset/train.parquet", self.hyperparams["batch_size"], drop_last=True
         )
-        train_dataset = LimitedIterableDataset(train_dataset, 64)
+        train_dataset = LimitedIterableDataset(train_dataset, 256)
         self.dataloaders["train"] = DataLoader(
             train_dataset,
             batch_size=None,
@@ -220,6 +221,7 @@ class Trainer:
                 )
                 for inputs_macro, target_macro in self.dataloaders["train"]
             )
+            t0 = time.perf_counter()
 
             for inputs, targets in batches:
                 self.optimizer.zero_grad()
@@ -246,14 +248,21 @@ class Trainer:
                         self.loss_fn.quantiles_list,
                         (running_q_loss / running_samples).tolist(),
                     ):
+                        samples_per_sec = running_samples / (time.perf_counter() - t0)
+                        metrics = {
+                            "train_pinball_loss_mean": running_train_loss,
+                            "train_samples_per_sec": samples_per_sec,
+                        }
                         metrics[f"train_pinball_loss_q{q}"] = l
                     mlflow.log_metrics(metrics, step=total_samples)
 
                     running_train_loss = 0.0
                     running_q_loss = 0.0
                     running_samples = 0
+                    t0 = time.perf_counter()
                 if total_samples % 4194304 == 0 and total_samples > 0:
                     self.evaluate("val", total_samples)
+                    t0 = time.perf_counter()
             pbar.close()
 
             self.evaluate("test", total_samples)
