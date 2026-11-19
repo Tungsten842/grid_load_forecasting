@@ -48,7 +48,6 @@ class RandomWindowDataset(IterableDataset):
         super().__init__()
         self.SERIES_COLS = ["mean_consumption_per_meter", "temperature", "humidity"]
         self.batch_size = batch_size
-        self.macro_batch_size = batch_size * 8
         self.drop_last = drop_last
 
         self.lf = pl.scan_parquet(str(path)).select(
@@ -104,16 +103,12 @@ class RandomWindowDataset(IterableDataset):
             starts = torch.from_numpy(starts)
             starts_t = starts[bad_before[starts + TOTAL_WINDOW] == bad_before[starts]]
 
-            for i in range(0, len(starts_t), self.macro_batch_size):
-                b = starts_t[i : i + self.macro_batch_size]
-                n = len(b) // self.batch_size
-                if (self.drop_last and len(b) < self.macro_batch_size) or n == 0:
+            for i in range(0, len(starts_t), self.batch_size):
+                b = starts_t[i : i + self.batch_size, None]
+                if self.drop_last and len(b) < self.batch_size:
                     continue
-
-                w = vals[b[: n * self.batch_size, None] + w_idx]
-                x = w[:, :INPUT_WINDOW].reshape(n, self.batch_size, INPUT_WINDOW, -1)
-                y = w[:, -OUTPUT_WINDOW:, 0].reshape(n, self.batch_size, OUTPUT_WINDOW)
-                yield x, y
+                w = vals[b + w_idx]
+                yield w[:, :INPUT_WINDOW, :], w[:, -OUTPUT_WINDOW:, 0]
 
 
 class LimitedIterableDataset(IterableDataset):
@@ -140,8 +135,8 @@ class Trainer:
             "num_vars": 3,
             "num_quantiles": 3,
             # Training params
-            "learning_rate": 4e-4,
-            "batch_size": 2048,
+            "learning_rate": 5e-4,
+            "batch_size": 4096,
             "dropout": 0.05,
         }
 
@@ -166,7 +161,7 @@ class Trainer:
         train_dataset = RandomWindowDataset(
             "dataset/train.parquet", self.hyperparams["batch_size"], drop_last=True
         )
-        train_dataset = LimitedIterableDataset(train_dataset, 256)
+        train_dataset = LimitedIterableDataset(train_dataset, 1024)
         self.dataloaders["train"] = DataLoader(
             train_dataset,
             batch_size=None,
@@ -214,16 +209,11 @@ class Trainer:
             running_q_loss = 0.0
             running_samples = 0
             total_samples = 0
-            batches = chain.from_iterable(
-                zip(
-                    inputs_macro.to(self.device, non_blocking=True),
-                    target_macro.to(self.device, non_blocking=True),
-                )
-                for inputs_macro, target_macro in self.dataloaders["train"]
-            )
             t0 = time.perf_counter()
 
-            for inputs, targets in batches:
+            for inputs, targets in self.dataloaders["train"]:
+                inputs = inputs.to(self.device, non_blocking=True)
+                targets = targets.to(self.device, non_blocking=True)
                 self.optimizer.zero_grad()
                 batch_size = inputs.size(0)
                 pbar.update(batch_size)
@@ -240,20 +230,20 @@ class Trainer:
                 running_samples += batch_size
                 total_samples += batch_size
 
-                if total_samples % 65536 == 0 and total_samples > 0:
+                if total_samples % 262144 == 0 and total_samples > 0:
                     running_train_loss /= running_samples
                     pbar.set_postfix(loss=f"{running_train_loss:.1f}", refresh=False)
-                    metrics = {"train_pinball_loss_mean": running_train_loss}
-                    for q, l in zip(
+                    samples_per_sec = running_samples / (time.perf_counter() - t0)
+                    metrics = {
+                        "train_pinball_loss_mean": running_train_loss,
+                        "train_samples_per_sec": samples_per_sec,
+                    }
+                    for q, q_loss in zip(
                         self.loss_fn.quantiles_list,
                         (running_q_loss / running_samples).tolist(),
                     ):
-                        samples_per_sec = running_samples / (time.perf_counter() - t0)
-                        metrics = {
-                            "train_pinball_loss_mean": running_train_loss,
-                            "train_samples_per_sec": samples_per_sec,
-                        }
-                        metrics[f"train_pinball_loss_q{q}"] = l
+                        metrics[f"train_pinball_loss_q{q}"] = q_loss
+
                     mlflow.log_metrics(metrics, step=total_samples)
 
                     running_train_loss = 0.0
@@ -277,14 +267,9 @@ class Trainer:
             running_q_loss = 0.0
             val_pbar = tqdm(desc="val", unit="sample", unit_scale=True, leave=False)
             total_samples = 0
-            batches = chain.from_iterable(
-                zip(
-                    inputs_macro.to(self.device, non_blocking=True),
-                    target_macro.to(self.device, non_blocking=True),
-                )
-                for inputs_macro, target_macro in self.dataloaders[split]
-            )
-            for inputs, targets in batches:
+            for inputs, targets in self.dataloaders[split]:
+                inputs = inputs.to(self.device, non_blocking=True)
+                targets = targets.to(self.device, non_blocking=True)
                 batch_size = inputs.size(0)
                 val_pbar.update(batch_size)
                 with (
