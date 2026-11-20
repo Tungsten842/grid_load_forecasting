@@ -114,13 +114,14 @@ class RandomWindowDataset(IterableDataset):
                 yield w[:, :INPUT_WINDOW, :], w[:, -OUTPUT_WINDOW:, 0]
 
 
-class LimitedIterableDataset(IterableDataset):
-    def __init__(self, dataset, limit):
-        self.dataset = dataset
-        self.limit = limit
+class InfiniteDataLoader(DataLoader):
+    def __init__(self, *args, epochs: int = 1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.epochs = epochs
 
     def __iter__(self):
-        yield from islice(iter(self.dataset), self.limit)
+        for _ in range(self.epochs):
+            yield from super().__iter__()
 
 
 class Trainer:
@@ -164,12 +165,12 @@ class Trainer:
         train_dataset = RandomWindowDataset(
             "dataset/train.parquet", self.hyperparams["batch_size"], drop_last=True
         )
-        train_dataset = LimitedIterableDataset(train_dataset, 1024)
-        self.dataloaders["train"] = DataLoader(
+        self.dataloaders["train"] = InfiniteDataLoader(
             train_dataset,
             batch_size=None,
             num_workers=8,
             persistent_workers=True,
+            epochs=1,
         )
 
         val_dataset = RandomWindowDataset(
