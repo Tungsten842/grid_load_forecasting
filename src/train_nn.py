@@ -3,7 +3,7 @@ import os
 os.environ["POLARS_MAX_THREADS"] = "4"
 import argparse
 import time
-from itertools import chain, islice, pairwise
+from itertools import islice, pairwise
 
 import mlflow
 import numpy as np
@@ -110,7 +110,7 @@ class RandomWindowDataset(IterableDataset):
                 b = starts_t[i : i + self.batch_size, None]
                 if self.drop_last and len(b) < self.batch_size:
                     continue
-                w = vals[b + w_idx]
+                w = vals[b + w_idx].to("cuda")
                 yield w[:, :INPUT_WINDOW, :], w[:, -OUTPUT_WINDOW:, 0]
 
 
@@ -164,13 +164,12 @@ class Trainer:
         train_dataset = RandomWindowDataset(
             "dataset/train.parquet", self.hyperparams["batch_size"], drop_last=True
         )
-        train_dataset = LimitedIterableDataset(train_dataset, 512)
+        train_dataset = LimitedIterableDataset(train_dataset, 1024)
         self.dataloaders["train"] = DataLoader(
             train_dataset,
             batch_size=None,
             num_workers=8,
             persistent_workers=True,
-            pin_memory=True,
         )
 
         val_dataset = RandomWindowDataset(
@@ -181,7 +180,6 @@ class Trainer:
             batch_size=None,
             num_workers=8,
             persistent_workers=True,
-            pin_memory=True,
         )
 
         test_dataset = RandomWindowDataset(
@@ -191,7 +189,6 @@ class Trainer:
             test_dataset,
             batch_size=None,
             num_workers=8,
-            pin_memory=True,
         )
 
         test_unseen_dataset = RandomWindowDataset(
@@ -201,7 +198,6 @@ class Trainer:
             test_unseen_dataset,
             batch_size=None,
             num_workers=8,
-            pin_memory=True,
         )
 
     def fit(self):
@@ -235,7 +231,7 @@ class Trainer:
                 running_samples += batch_size
                 total_samples += batch_size
 
-                if total_samples % 262144 == 0 and total_samples > 0:
+                if total_samples % 2**19 == 0 and total_samples > 0:
                     running_train_loss /= running_samples
                     pbar.set_postfix(loss=f"{running_train_loss:.1f}", refresh=False)
                     samples_per_sec = running_samples / (time.perf_counter() - t0)
@@ -255,10 +251,12 @@ class Trainer:
                     running_q_loss = 0.0
                     running_samples = 0
                     t0 = time.perf_counter()
-                if total_samples % 4194304 == 0 and total_samples > 0:
+                if total_samples % 2**23 == 0 and total_samples > 0:
                     self.evaluate("val", total_samples)
                     t0 = time.perf_counter()
             pbar.close()
+
+            self.evaluate("val", total_samples)
 
             self.evaluate("test", total_samples)
 
@@ -270,7 +268,7 @@ class Trainer:
             total_val_loss = 0.0
             running_raw_loss = 0.0
             running_q_loss = 0.0
-            val_pbar = tqdm(desc="val", unit="sample", unit_scale=True, leave=False)
+            val_pbar = tqdm(desc=split, unit="sample", unit_scale=True, leave=False)
             total_samples = 0
             for inputs, targets in self.dataloaders[split]:
                 inputs = inputs.to(self.device, non_blocking=True)
