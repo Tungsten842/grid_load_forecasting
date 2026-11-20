@@ -140,7 +140,6 @@ def main():
         output_format="list",
     )
     nn_model = mlflow.pytorch.load_model(models[0].model_uri)
-    nn_model.load_state_dict(torch.load("model.pt"))
     nn_model.eval()
 
     n_series = 40

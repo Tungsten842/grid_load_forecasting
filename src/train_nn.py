@@ -41,11 +41,14 @@ class PinballLoss(nn.Module):
 
 
 class RandomWindowDataset(IterableDataset):
-    CHUNK_ROWS = 2**27
     FEEDER_COL = "lv_feeder_unique_id"
 
-    def __init__(self, path, batch_size, n_meters=None, drop_last=False):
+    def __init__(
+        self, path, batch_size, n_meters=None, drop_last=False, CHUNK_ROWS=2**27
+    ):
         super().__init__()
+        self.CHUNK_ROWS = CHUNK_ROWS
+
         self.SERIES_COLS = ["mean_consumption_per_meter", "temperature", "humidity"]
         self.batch_size = batch_size
         self.drop_last = drop_last
@@ -161,41 +164,43 @@ class Trainer:
         train_dataset = RandomWindowDataset(
             "dataset/train.parquet", self.hyperparams["batch_size"], drop_last=True
         )
-        train_dataset = LimitedIterableDataset(train_dataset, 1024)
+        train_dataset = LimitedIterableDataset(train_dataset, 512)
         self.dataloaders["train"] = DataLoader(
             train_dataset,
             batch_size=None,
-            num_workers=4,
+            num_workers=8,
             persistent_workers=True,
             pin_memory=True,
         )
 
         val_dataset = RandomWindowDataset(
-            "dataset/val.parquet", self.hyperparams["batch_size"]
+            "dataset/val.parquet", self.hyperparams["batch_size"], CHUNK_ROWS=2**25
         )
         self.dataloaders["val"] = DataLoader(
             val_dataset,
             batch_size=None,
-            num_workers=4,
+            num_workers=8,
             persistent_workers=True,
             pin_memory=True,
         )
 
         test_dataset = RandomWindowDataset(
-            "dataset/test.parquet", self.hyperparams["batch_size"]
+            "dataset/test.parquet", self.hyperparams["batch_size"], CHUNK_ROWS=2**25
         )
         self.dataloaders["test"] = DataLoader(
             test_dataset,
             batch_size=None,
-            num_workers=4,
+            num_workers=8,
             pin_memory=True,
         )
 
-        test_unseen_dataset = RandomWindowDataset("dataset/test_unseen.parquet", 128)
+        test_unseen_dataset = RandomWindowDataset(
+            "dataset/test_unseen.parquet", self.hyperparams["batch_size"]
+        )
         self.dataloaders["test_unseen"] = DataLoader(
             test_unseen_dataset,
             batch_size=None,
-            num_workers=4,
+            num_workers=8,
             pin_memory=True,
         )
 
