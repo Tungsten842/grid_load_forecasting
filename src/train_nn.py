@@ -1,9 +1,10 @@
+import copy
 import os
 
 os.environ["POLARS_MAX_THREADS"] = "4"
 import argparse
 import time
-from itertools import islice, pairwise
+from itertools import pairwise
 
 import mlflow
 import numpy as np
@@ -124,6 +125,27 @@ class InfiniteDataLoader(DataLoader):
             yield from super().__iter__()
 
 
+class EarlyStopping:
+    def __init__(self, patience):
+        self.patience = patience
+        self.best_loss = float("inf")
+        self.counter = 0
+        self.best_model = None
+
+    def step(self, val_loss, model):
+        if val_loss < self.best_loss:
+            self.best_loss = val_loss
+            self.counter = 0
+            self.best_model = copy.deepcopy(model.state_dict())
+            return False
+        self.counter += 1
+        return self.counter >= self.patience
+
+    def restore_best(self, model):
+        if self.best_model is not None:
+            model.load_state_dict(self.best_model)
+
+
 class Trainer:
     def __init__(self):
         torch.set_float32_matmul_precision("high")
@@ -142,6 +164,7 @@ class Trainer:
             "learning_rate": 5e-4,
             "batch_size": 4096,
             "dropout": 0.05,
+            "patience": 10,
         }
 
         self.model = LoadForecaster(
@@ -203,6 +226,7 @@ class Trainer:
 
     def fit(self):
         pbar = tqdm(desc="train", unit="sample", unit_scale=True)
+        early_stopping = EarlyStopping(patience=self.hyperparams["patience"])
 
         with mlflow.start_run():
             mlflow.log_params(self.hyperparams)
@@ -253,11 +277,15 @@ class Trainer:
                     running_samples = 0
                     t0 = time.perf_counter()
                 if total_samples % 2**23 == 0 and total_samples > 0:
-                    self.evaluate("val", total_samples)
+                    val_loss = self.evaluate("val", total_samples).item()
+                    if early_stopping.step(val_loss, self.model):
+                        break
                     t0 = time.perf_counter()
             pbar.close()
 
-            self.evaluate("val", total_samples)
+            val_loss = self.evaluate("val", total_samples).item()
+            early_stopping.step(val_loss, self.model)
+            early_stopping.restore_best(self.model)
 
             self.evaluate("test", total_samples)
 
