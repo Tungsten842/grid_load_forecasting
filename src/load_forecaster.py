@@ -90,12 +90,7 @@ class TiDE(nn.Module):
 
         d = d.reshape(batch_size, self.output_length, self.decoder_dim)
 
-        out_dense = self.temporal_decoder(d)
-        skip = self.linear_skip(endo).reshape(
-            batch_size, self.output_length, self.num_quantiles
-        )
-
-        out = out_dense + skip
+        out = self.temporal_decoder(d)
         out = out * std + mean
 
         return out

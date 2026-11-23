@@ -150,12 +150,12 @@ class Trainer:
             # Model params
             "input_length": INPUT_WINDOW,
             "output_length": OUTPUT_WINDOW,
-            "embed_size": 672,
+            "embed_size": 640,
             "num_quantiles": 3,
-            "decoder_dim": 32,
+            "decoder_dim": 64,
             "temporal_decoder_hidden": 64,
-            "num_encoder_layers": 2,
-            "num_decoder_layers": 2,
+            "num_encoder_layers": 1,
+            "num_decoder_layers": 1,
             # Training params
             "learning_rate": 5e-4,
             "batch_size": 4096,
