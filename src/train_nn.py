@@ -16,12 +16,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 
-from load_forecaster import (
-    INPUT_WINDOW,
-    OUTPUT_WINDOW,
-    TOTAL_WINDOW,
-    LoadForecaster,
-)
+from load_forecaster import INPUT_WINDOW, OUTPUT_WINDOW, TOTAL_WINDOW, TiDE
 
 
 class PinballLoss(nn.Module):
@@ -50,7 +45,7 @@ class RandomWindowDataset(IterableDataset):
         super().__init__()
         self.CHUNK_ROWS = CHUNK_ROWS
 
-        self.SERIES_COLS = ["mean_consumption_per_meter", "temperature", "humidity"]
+        self.SERIES_COLS = ["mean_consumption_per_meter"]
         self.batch_size = batch_size
         self.drop_last = drop_last
 
@@ -155,26 +150,28 @@ class Trainer:
             # Model params
             "input_length": INPUT_WINDOW,
             "output_length": OUTPUT_WINDOW,
-            "tff_hidden": 1024,
-            "cff_hidden": 64,
-            "embed_size": 512,
-            "num_vars": 3,
+            "embed_size": 672,
             "num_quantiles": 3,
+            "decoder_dim": 32,
+            "temporal_decoder_hidden": 64,
+            "num_encoder_layers": 2,
+            "num_decoder_layers": 2,
             # Training params
             "learning_rate": 5e-4,
             "batch_size": 4096,
-            "dropout": 0.05,
+            "dropout": 0.00,
             "patience": 10,
         }
 
-        self.model = LoadForecaster(
+        self.model = TiDE(
             input_length=self.hyperparams["input_length"],
             output_length=self.hyperparams["output_length"],
-            tff_hidden=self.hyperparams["tff_hidden"],
-            cff_hidden=self.hyperparams["cff_hidden"],
-            embed_size=self.hyperparams["embed_size"],
-            num_vars=self.hyperparams["num_vars"],
             num_quantiles=self.hyperparams["num_quantiles"],
+            decoder_dim=self.hyperparams["decoder_dim"],
+            num_encoder_layers=self.hyperparams["num_encoder_layers"],
+            num_decoder_layers=self.hyperparams["num_decoder_layers"],
+            temporal_decoder_hidden=self.hyperparams["temporal_decoder_hidden"],
+            embed_size=self.hyperparams["embed_size"],
             dropout=self.hyperparams["dropout"],
         ).to(self.device)
 

@@ -1,4 +1,3 @@
-import torch
 from torch import nn
 
 INPUT_WINDOW = 672
@@ -7,129 +6,99 @@ OUTPUT_WINDOW = 48
 TOTAL_WINDOW = INPUT_WINDOW + GAP_WINDOW + OUTPUT_WINDOW
 
 
-class RevIN(nn.Module):
-    def __init__(self, dim=1):
+class ResBlock(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout, use_ln=True):
         super().__init__()
-        self.dim = dim
-
-    def normalize(self, x):
-        mean = x.mean(dim=self.dim, keepdim=True).detach()
-
-        var = torch.var(x, dim=self.dim, keepdim=True, unbiased=False)
-        std = torch.sqrt(var + 1e-5).detach()
-
-        x = (x - mean) / std
-        return x, mean, std
-
-    def denormalize(self, y, mean, std):
-        y = std * y + mean
-        return y
-
-
-class EMBED(nn.Module):
-    def __init__(self, input_length, d_model, dropout):
-        super().__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.act = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_dim, output_dim)
         self.dropout = nn.Dropout(dropout)
-        self.embed = nn.Linear(input_length, d_model)
+        self.skip = nn.Linear(input_dim, output_dim)
+        self.ln = nn.LayerNorm(output_dim) if use_ln else nn.Identity()
 
     def forward(self, x):
-        x = self.dropout(x)
-        return self.embed(x)
+        residual = self.skip(x)
+        out = self.fc1(x)
+        out = self.act(out)
+        out = self.fc2(out)
+        out = self.dropout(out)
+        return self.ln(out + residual)
 
 
-class TGM(nn.Module):
-    def __init__(self, d_model, hidden_size, dropout):
-        super().__init__()
-        self.gate = nn.Sequential(
-            nn.Linear(d_model, hidden_size),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, d_model),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, endo, glob):
-        endo_token = torch.cat([endo, glob], -1)
-        endo_token = self.gate(endo_token) * endo_token
-
-        endo_size = endo.shape[-1]
-        endo = endo_token[..., :endo_size]
-        glob = endo_token[..., endo_size:]
-        return endo, glob
-
-
-class VGM(nn.Module):
-    def __init__(self, num_vars, hidden_size, dropout):
-        super().__init__()
-        self.gate = nn.Sequential(
-            nn.Linear(num_vars, hidden_size),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, num_vars),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, exo, glob):
-        exo_token = torch.cat([exo, glob], 1).transpose(1, 2)
-        exo_token = self.gate(exo_token) * exo_token
-
-        exo_token = exo_token.transpose(1, 2)
-        exo = exo_token[:, :-1, :]
-        glob = exo_token[:, -1:, :]
-        return exo, glob
-
-
-class LoadForecaster(nn.Module):
+class TiDE(nn.Module):
     def __init__(
         self,
         input_length,
         output_length,
-        tff_hidden,
-        cff_hidden,
-        embed_size,
-        num_vars,
         num_quantiles,
+        embed_size,
+        decoder_dim,
+        temporal_decoder_hidden,
+        num_encoder_layers,
+        num_decoder_layers,
         dropout,
     ):
         super().__init__()
         self.output_length = output_length
+        self.decoder_dim = decoder_dim
+        self.num_quantiles = num_quantiles
 
-        self.revin = RevIN()
+        encoder_layers = [
+            ResBlock(
+                input_length if i == 0 else embed_size,
+                embed_size,
+                embed_size,
+                dropout,
+            )
+            for i in range(num_encoder_layers)
+        ]
+        self.encoder = nn.Sequential(*encoder_layers)
 
-        self.embed = EMBED(input_length, embed_size, dropout)
-        self.quantiles = num_quantiles
+        decoder_output_dim = output_length * decoder_dim
+        decoder_layers = [
+            ResBlock(
+                embed_size,
+                embed_size,
+                decoder_output_dim if i == num_decoder_layers - 1 else embed_size,
+                dropout,
+            )
+            for i in range(num_decoder_layers)
+        ]
+        self.decoder = nn.Sequential(*decoder_layers)
 
-        self.glob1 = nn.Parameter(torch.randn(1, 1, embed_size))
-
-        self.tgm = TGM(embed_size * 2, tff_hidden, dropout)
-        self.vgm = VGM(num_vars, cff_hidden, dropout)
-
-        self.head = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(embed_size * 2, output_length * num_quantiles),
+        self.temporal_decoder = ResBlock(
+            input_dim=decoder_dim,
+            hidden_dim=temporal_decoder_hidden,
+            output_dim=num_quantiles,
+            dropout=dropout,
+            use_ln=False,
         )
 
+        self.linear_skip = nn.Linear(input_length, output_length * num_quantiles)
+
     def forward(self, x):
-        endo1, mean, std = self.revin.normalize(x[:, :, 0:1])
-        exo1 = self.revin.normalize(x[:, :, 1:])[0]
+        batch_size = x.size(0)
 
-        combined = torch.cat([endo1, exo1], dim=2)
-        combined = self.embed(combined.transpose(1, 2))
-        endo1 = combined[:, 0:1, :]
-        exo1 = combined[:, 1:, :]
+        endo = x[:, :, 0:1]
 
-        glob1 = self.glob1.expand_as(endo1)
+        mean = endo.mean(dim=1, keepdim=True).detach()
+        std = endo.std(dim=1, keepdim=True).detach() + 1e-5
+        endo = ((endo - mean) / std).squeeze(-1)
 
-        endo2, glob2 = self.tgm(endo1, glob1)
+        e = self.encoder(endo)
+        d = self.decoder(e)
 
-        glob3 = self.vgm(exo1, glob2)[1]
+        d = d.reshape(batch_size, self.output_length, self.decoder_dim)
 
-        y = self.head(torch.cat([endo2, glob3], -1))
+        out_dense = self.temporal_decoder(d)
+        skip = self.linear_skip(endo).reshape(
+            batch_size, self.output_length, self.num_quantiles
+        )
 
-        y = self.revin.denormalize(y, mean, std)
+        out = out_dense + skip
+        out = out * std + mean
 
-        y = y.reshape(-1, self.output_length, self.quantiles)
-        return y
+        return out
 
 
 class ToyLoadForecaster(nn.Module):
