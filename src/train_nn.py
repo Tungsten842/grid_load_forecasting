@@ -16,7 +16,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 
-from load_forecaster import INPUT_WINDOW, OUTPUT_WINDOW, TOTAL_WINDOW, TiDE
+from load_forecaster import INPUT_WINDOW, OUTPUT_WINDOW, TOTAL_WINDOW, LoadForecaster
 
 
 class PinballLoss(nn.Module):
@@ -163,7 +163,7 @@ class Trainer:
             "patience": 10,
         }
 
-        self.model = TiDE(
+        self.model = LoadForecaster(
             input_length=self.hyperparams["input_length"],
             output_length=self.hyperparams["output_length"],
             num_quantiles=self.hyperparams["num_quantiles"],
