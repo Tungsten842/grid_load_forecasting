@@ -78,7 +78,9 @@ def prepare_features(lf, group_id, ts_name, target_name):
     return lf.with_columns(new_features)
 
 
-def prepare_dataset(file, n_series=None, return_unique_id=False, drop_columns=True):
+def prepare_dataset(
+    file, n_series=None, return_unique_id=False, percentage=1, drop_columns=True
+):
     group_id = "lv_feeder_unique_id"
     ts_name = "data_collection_log_timestamp"
     target_name = "mean_consumption_per_meter"
@@ -88,6 +90,11 @@ def prepare_dataset(file, n_series=None, return_unique_id=False, drop_columns=Tr
     if n_series:
         ids = lf.select(group_id).unique().sort(group_id).head(n_series)
         lf = lf.join(ids, on=group_id, maintain_order="left")
+
+    if percentage < 1.0:
+        lf = lf.filter(
+            (pl.int_range(pl.len()).hash(seed=42).cast(pl.Float64) / 2**64) < percentage
+        )
 
     lf = prepare_features(lf, group_id, ts_name, target_name)
 
@@ -200,7 +207,7 @@ def main():
     mlflow.set_experiment("LightGBM")
 
     path = Path("dataset")
-    X_train, y_train = prepare_dataset(path / "train.parquet")
+    X_train, y_train = prepare_dataset(path / "train.parquet", percentage=0.40)
     X_val, y_val = prepare_dataset(path / "val.parquet")
     quantiles = [0.1, 0.5, 0.9]
 

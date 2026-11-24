@@ -25,7 +25,7 @@ class ResBlock(nn.Module):
         return self.ln(out + residual)
 
 
-class TiDE(nn.Module):
+class LoadForecaster(nn.Module):
     def __init__(
         self,
         input_length,
